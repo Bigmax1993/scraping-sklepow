@@ -1,0 +1,1 @@
+﻿# Germany closed markets scraper

@@ -223,18 +223,18 @@ def extract_open_status(text: str) -> str:
 
 
 def is_closed_status(status: str) -> bool:
+    """
+    Zwraca True TYLKO dla statusów typu 'tymczasowo zamknięte' (PL/DE/EN),
+    ignoruje zwykłe 'zamknięte/closed/geschlossen'.
+    """
     s = (status or "").strip().lower()
     return any(
         x in s
         for x in [
-            "zamknięte",
-            "zamkniete",
             "tymczasowo zamknięte",
             "tymczasowo zamkniete",
-            "geschlossen",
             "vorübergehend geschlossen",
             "voruebergehend geschlossen",
-            "closed",
             "temporarily closed",
         ]
     )

@@ -32,6 +32,33 @@ LON_STEP = 1.1
 
 MAX_SCROLL_ROUNDS = 25
 SCROLL_PAUSE = 1.0
+HEADLESS_DEFAULT = True
+CAPTCHA_CHECK_TIMEOUT = 600  # sekundy
+
+
+class CaptchaRequired(Exception):
+    pass
+
+
+def is_running_in_jupyter():
+    try:
+        from IPython import get_ipython
+
+        shell = get_ipython()
+        if shell is None:
+            return False
+        return shell.__class__.__name__ == "ZMQInteractiveShell"
+    except Exception:
+        return False
+
+
+def wait_for_user_confirmation(message, jupyter_mode=False):
+    if jupyter_mode:
+        print(message)
+        print("W Jupyter wpisz cokolwiek i naciśnij Enter, aby kontynuować.")
+    else:
+        print(message)
+    input("> ")
 
 
 def setup_logging():
@@ -160,6 +187,110 @@ def search_url(brand, lat, lon, zoom=10.5):
     return f"https://www.google.com/maps/search/{quote_plus(brand + ' deutschland')}/@{lat},{lon},{zoom}z"
 
 
+def build_driver(headless=True):
+    options = webdriver.ChromeOptions()
+    if headless:
+        options.add_argument("--headless=new")
+        options.add_argument("--window-size=1920,1080")
+    else:
+        options.add_argument("--start-maximized")
+    options.add_argument("--disable-blink-features=AutomationControlled")
+    return webdriver.Chrome(service=Service(ChromeDriverManager().install()), options=options)
+
+
+def is_captcha_page(driver):
+    try:
+        url = (driver.current_url or "").lower()
+    except Exception:
+        url = ""
+
+    try:
+        title = (driver.title or "").lower()
+    except Exception:
+        title = ""
+
+    if any(x in url for x in ["/sorry/", "sorry/index", "recaptcha"]):
+        return True
+    if any(x in title for x in ["unusual traffic", "recaptcha", "robot check"]):
+        return True
+
+    captcha_xpaths = [
+        "//iframe[contains(@src, 'recaptcha')]",
+        "//*[contains(translate(text(),'ABCDEFGHIJKLMNOPQRSTUVWXYZ','abcdefghijklmnopqrstuvwxyz'),'i am not a robot')]",
+        "//*[contains(translate(text(),'ABCDEFGHIJKLMNOPQRSTUVWXYZ','abcdefghijklmnopqrstuvwxyz'),'unusual traffic')]",
+        "//*[contains(translate(text(),'ABCDEFGHIJKLMNOPQRSTUVWXYZ','abcdefghijklmnopqrstuvwxyz'),'reCAPTCHA')]",
+    ]
+    for xp in captcha_xpaths:
+        try:
+            if driver.find_elements(By.XPATH, xp):
+                return True
+        except Exception:
+            continue
+    return False
+
+
+def transfer_cookies(source_driver, target_driver):
+    try:
+        cookies = source_driver.get_cookies()
+    except Exception:
+        return
+    for cookie in cookies:
+        try:
+            target_driver.add_cookie(cookie)
+        except Exception:
+            continue
+
+
+def handle_captcha(driver, logger, jupyter_mode=False):
+    logger.warning("Wykryto CAPTCHA. Przełączam na widoczną przeglądarkę do ręcznego potwierdzenia.")
+    print("\n[CAPTCHA] Wykryto CAPTCHA - otwieram przeglądarkę do ręcznego potwierdzenia.")
+    current_url = ""
+    try:
+        current_url = driver.current_url
+    except Exception:
+        pass
+
+    visible_driver = None
+    try:
+        visible_driver = build_driver(headless=False)
+        visible_driver.get("https://www.google.com")
+        transfer_cookies(driver, visible_driver)
+        visible_driver.get(current_url or "https://www.google.com/maps")
+
+        wait_for_user_confirmation(
+            "[CAPTCHA] Rozwiąż CAPTCHA w otwartym oknie. Po zakończeniu potwierdź tutaj.",
+            jupyter_mode=jupyter_mode,
+        )
+
+        wait_start = time.time()
+        while is_captcha_page(visible_driver):
+            if (time.time() - wait_start) > CAPTCHA_CHECK_TIMEOUT:
+                raise TimeoutException("Przekroczono czas oczekiwania na rozwiązanie CAPTCHA.")
+            wait_for_user_confirmation(
+                "[CAPTCHA] Nadal wykrywam CAPTCHA. Dokończ w przeglądarce i potwierdź ponownie.",
+                jupyter_mode=jupyter_mode,
+            )
+
+        headless_driver = build_driver(headless=True)
+        headless_driver.get("https://www.google.com")
+        transfer_cookies(visible_driver, headless_driver)
+        if current_url:
+            headless_driver.get(current_url)
+        logger.info("CAPTCHA rozwiązana. Powrót do pracy w tle.")
+        print("[CAPTCHA] CAPTCHA rozwiązana. Wracam do trybu tła.\n")
+        return headless_driver
+    finally:
+        try:
+            driver.quit()
+        except Exception:
+            pass
+        if visible_driver is not None:
+            try:
+                visible_driver.quit()
+            except Exception:
+                pass
+
+
 def scroll_results_panel(driver):
     panel = None
     try:
@@ -252,6 +383,8 @@ def extract_details_in_new_tab(driver, url):
 
     try:
         time.sleep(1.5)
+        if is_captcha_page(driver):
+            raise CaptchaRequired("CAPTCHA w widoku szczegółów miejsca.")
 
         tel_links = driver.find_elements(By.XPATH, "//a[starts-with(@href,'tel:')]")
         if tel_links:
@@ -355,6 +488,8 @@ def scrape_brand_cell(driver, brand, lat, lon, cache, logger):
     logger.info(f"Start komórki: brand={brand}, lat={lat}, lon={lon}")
     driver.get(search_url(brand, lat, lon))
     time.sleep(3)
+    if is_captcha_page(driver):
+        raise CaptchaRequired("CAPTCHA po wejściu na stronę wyszukiwania.")
 
     dismiss_consent(driver)
 
@@ -363,6 +498,8 @@ def scrape_brand_cell(driver, brand, lat, lon, cache, logger):
             EC.presence_of_element_located((By.XPATH, "//a[contains(@href, '/maps/place/')]"))
         )
     except TimeoutException:
+        if is_captcha_page(driver):
+            raise CaptchaRequired("CAPTCHA zamiast listy wyników.")
         logger.warning(f"Timeout – brak wyników dla brand={brand}, lat={lat}, lon={lon}")
         return []
 
@@ -443,16 +580,15 @@ def scrape_brand_cell(driver, brand, lat, lon, cache, logger):
     return rows
 
 
-def main():
+def run_scraper(headless_default=HEADLESS_DEFAULT, jupyter_mode=None):
+    if jupyter_mode is None:
+        jupyter_mode = is_running_in_jupyter()
+
     logger = setup_logging()
     logger.info("=== START skryptu Google Maps Niemcy (zamknięte) ===")
+    logger.info(f"Tryb Jupyter: {'TAK' if jupyter_mode else 'NIE'}")
 
-    options = webdriver.ChromeOptions()
-    # options.add_argument("--headless=new")
-    options.add_argument("--start-maximized")
-    options.add_argument("--disable-blink-features=AutomationControlled")
-
-    driver = webdriver.Chrome(service=Service(ChromeDriverManager().install()), options=options)
+    driver = build_driver(headless=headless_default)
 
     all_rows, seen_global = load_existing_csv(OUTPUT_FILE, logger)
     cache = load_cache(logger)
@@ -471,27 +607,41 @@ def main():
             print(f"\n=== Komórka {idx}/{len(grid_points)} | lat={lat}, lon={lon} ===")
 
             for brand in BRANDS:
-                try:
-                    rows = scrape_brand_cell(driver, brand, lat, lon, cache, logger)
-                    added = 0
+                captcha_retries = 0
+                while True:
+                    try:
+                        rows = scrape_brand_cell(driver, brand, lat, lon, cache, logger)
+                        added = 0
 
-                    for r in rows:
-                        if not is_closed_status(r.get("status", "")):
-                            continue
-                        if r["url"] in seen_global:
-                            continue
-                        seen_global.add(r["url"])
-                        all_rows.append(r)
-                        added += 1
+                        for r in rows:
+                            if not is_closed_status(r.get("status", "")):
+                                continue
+                            if r["url"] in seen_global:
+                                continue
+                            seen_global.add(r["url"])
+                            all_rows.append(r)
+                            added += 1
 
-                    logger.info(f"{brand.upper()}: +{added} (zamknięte) w tej komórce")
-                    print(f"{brand.upper()}: +{added} (zamknięte)")
-                    save_csv(all_rows, OUTPUT_FILE)
-                    save_cache(cache, logger)
+                        logger.info(f"{brand.upper()}: +{added} (zamknięte) w tej komórce")
+                        print(f"{brand.upper()}: +{added} (zamknięte)")
+                        save_csv(all_rows, OUTPUT_FILE)
+                        save_cache(cache, logger)
+                        break
 
-                except Exception as e:
-                    logger.exception(f"{brand.upper()}: błąd")
-                    print(f"{brand.upper()}: błąd ({e})")
+                    except CaptchaRequired as e:
+                        captcha_retries += 1
+                        logger.warning(f"{brand.upper()}: {e} (próba {captcha_retries})")
+                        if captcha_retries > 3:
+                            logger.error(f"{brand.upper()}: zbyt wiele CAPTCHA, pomijam brand.")
+                            print(f"{brand.upper()}: zbyt wiele CAPTCHA, pomijam.")
+                            break
+                        driver = handle_captcha(driver, logger, jupyter_mode=jupyter_mode)
+                        time.sleep(2)
+                        continue
+                    except Exception as e:
+                        logger.exception(f"{brand.upper()}: błąd")
+                        print(f"{brand.upper()}: błąd ({e})")
+                        break
 
     finally:
         driver.quit()
@@ -499,6 +649,10 @@ def main():
 
     logger.info(f"Gotowe. Zapisano {len(all_rows)} rekordów (zamknięte) do: {OUTPUT_FILE}")
     print(f"\nGotowe. Zapisano {len(all_rows)} rekordów (zamknięte) do: {OUTPUT_FILE}")
+
+
+def main():
+    run_scraper(headless_default=HEADLESS_DEFAULT, jupyter_mode=False)
 
 
 if __name__ == "__main__":

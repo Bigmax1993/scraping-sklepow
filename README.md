@@ -81,6 +81,26 @@ Workflow znajduje sie w `.github/workflows/ci.yml` i oferuje:
 
 - automatyczne uruchamianie testow na `push` i `pull_request`,
 - reczne uruchamianie z poziomu zakladki **Actions** (`workflow_dispatch`),
-- opcjonalne reczne odpalenie pelnego scrapera (`run_scraper=true`).
+- opcjonalne reczne odpalenie pelnego scrapera (`run_scraper=true`),
+- automatyczny upload finalnego CSV do Google Drive.
 
 Po dodaniu sekretu `GOOGLE_API_KEY` w ustawieniach repo mozna uruchomic scraper recznie z GitHub Actions.
+
+## Upload CSV do Twojego Google Drive
+
+Docelowy folder jest ustawiony na:
+`1r9skaSfhfJ13xzkS8wIOkCKCRfY6VDd9`
+
+Po zakonczeniu joba `run-scraper` plik
+`Wyniki/germany_markets_selenium_closed_only.csv`
+jest automatycznie wysylany do tego folderu.
+
+### Co musisz ustawic raz
+
+1. W Google Cloud utworz Service Account z dostepem do Google Drive API.
+2. Wygeneruj klucz JSON.
+3. Udostepnij folder Drive temu kontu serwisowemu (e-mail konta serwisowego, uprawnienie co najmniej Editor).
+4. W repo GitHub dodaj secret:
+   - `GOOGLE_DRIVE_SERVICE_ACCOUNT_JSON` -> wklej pelna zawartosc JSON klucza.
+
+Skrypt uploadu to `upload_csv_to_drive.py`.

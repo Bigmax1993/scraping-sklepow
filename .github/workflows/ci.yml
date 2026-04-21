@@ -42,6 +42,7 @@ jobs:
     env:
       GOOGLE_API_KEY: ${{ secrets.GOOGLE_API_KEY }}
       GEMINI_MODEL: gemini-1.5-flash
+      GOOGLE_DRIVE_FOLDER_ID: 1r9skaSfhfJ13xzkS8wIOkCKCRfY6VDd9
     steps:
       - name: Checkout
         uses: actions/checkout@v4
@@ -63,5 +64,24 @@ jobs:
             exit 1
           fi
 
+      - name: Validate Drive credentials
+        run: |
+          if [ -z "${{ secrets.GOOGLE_DRIVE_SERVICE_ACCOUNT_JSON }}" ]; then
+            echo "Brak secretu GOOGLE_DRIVE_SERVICE_ACCOUNT_JSON."
+            echo "Dodaj JSON konta serwisowego w Settings > Secrets and variables > Actions."
+            exit 1
+          fi
+
       - name: Run scraper
         run: python scraper.py
+
+      - name: Write Drive service account file
+        run: |
+          cat > gdrive-service-account.json <<'EOF'
+          ${{ secrets.GOOGLE_DRIVE_SERVICE_ACCOUNT_JSON }}
+          EOF
+
+      - name: Upload CSV to Google Drive folder
+        env:
+          GOOGLE_APPLICATION_CREDENTIALS: gdrive-service-account.json
+        run: python upload_csv_to_drive.py

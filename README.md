@@ -1,40 +1,50 @@
-﻿# Germany temporarily closed markets scraper
+﻿# Scraping sklepow
 
-Skrypt w Pythonie wykorzystujący Selenium do skrapowania Google Maps dla wybranych marek spożywczych w Niemczech.
+Skrypt w Pythonie wykorzystujący Selenium do skrapowania Google Maps dla wybranych marek spozywczych w Niemczech.
 
-Do CSV zapisywane są **wyłącznie sklepy oznaczone jako tymczasowo zamknięte**:
+Do CSV zapisywane sa **wylacznie sklepy oznaczone jako tymczasowo zamkniete**:
 
-- polski: `tymczasowo zamknięte / tymczasowo zamkniete`
-- niemiecki: `vorübergehend geschlossen / voruebergehend geschlossen`
+- polski: `tymczasowo zamkniete / tymczasowo zamknięte`
+- niemiecki: `voruebergehend geschlossen / vorübergehend geschlossen`
 - angielski: `temporarily closed`
 
-## Najważniejsze cechy
+## Najwazniejsze cechy
 
-- Domyślnie działa w tle (`headless`).
-- Gdy pojawi się CAPTCHA, automatycznie otwiera widoczną przeglądarkę do ręcznego potwierdzenia.
-- Po rozwiązaniu CAPTCHA wraca do działania w tle.
-- Obsługuje wznowienie pracy na podstawie istniejącego CSV i cache JSON.
-- Może działać zarówno z terminala, jak i z Jupyter Lab.
+- Domyslnie dziala w tle (`headless`).
+- Gdy pojawi sie CAPTCHA, skrypt przelacza sie na widoczna przegladarke do recznego potwierdzenia.
+- Po rozwiazaniu CAPTCHA wraca do pracy w tle.
+- Obsluguje wznowienie pracy na podstawie istniejacego CSV i cache JSON.
+- Dziala z terminala oraz z Jupyter Lab.
 
 ## Instalacja
 
-1. Zainstaluj zależności:
+```bash
+pip install -r requirements.txt
+```
 
-   ```bash
-   pip install -r requirements.txt
-   ```
+## Konfiguracja Gemini API
 
-## Uruchomienie z terminala
+Skrypt odczytuje klucz z `GOOGLE_API_KEY`.
+
+PowerShell:
+
+```powershell
+$env:GOOGLE_API_KEY="twoj_klucz_api"
+```
+
+CMD:
+
+```cmd
+set GOOGLE_API_KEY=twoj_klucz_api
+```
+
+## Uruchomienie reczne (lokalnie)
 
 ```bash
 python scraper.py
 ```
 
-Skrypt uruchamia `main()`, która wywołuje `run_scraper(headless_default=True, jupyter_mode=False)`.
-
 ## Uruchomienie z Jupyter Lab
-
-W notebooku użyj:
 
 ```python
 from scraper import run_scraper
@@ -42,25 +52,35 @@ from scraper import run_scraper
 run_scraper(headless_default=True, jupyter_mode=True)
 ```
 
-W trybie Jupyter, przy CAPTCHA:
+W trybie Jupyter przy CAPTCHA:
 
-1. Otworzy się widoczna przeglądarka.
-2. Rozwiąż CAPTCHA ręcznie.
-3. Wróć do komórki i potwierdź Enterem.
-4. Skrypt kontynuuje działanie w tle.
+1. Otwiera sie widoczna przegladarka.
+2. Rozwiazujesz CAPTCHA recznie.
+3. Potwierdzasz Enterem w notebooku.
+4. Skrypt kontynuuje dzialanie.
 
 ## Wyniki
 
-- CSV: `C:\Users\kanbu\Documents\Budowy\germany_markets_selenium_closed_only.csv`
-- cache JSON: `C:\Users\kanbu\Documents\Budowy\germany_markets_cache.json`
-- logi: `C:\Users\kanbu\Documents\Budowy\germany_markets_scraper.log`
+Pliki wynikowe zapisywane sa lokalnie w folderze `Wyniki/`:
+
+- `Wyniki/germany_markets_selenium_closed_only.csv`
+- `Wyniki/germany_markets_cache.json`
+- `Wyniki/germany_markets_scraper.log`
+
+Folder `Wyniki/` jest ignorowany przez Git i nie trafia do repozytorium.
 
 ## Testy
 
-Uruchom testy:
-
 ```bash
-python -m pytest tests/test_status_parsing.py tests/test_captcha_and_driver.py
+python -m pytest tests/test_status_parsing.py tests/test_captcha_and_driver.py -q
 ```
 
-Skrypt można wznawiać – wykorzystuje istniejący CSV i cache JSON, dzięki czemu nie pobiera ponownie już znanych miejsc.
+## GitHub Actions
+
+Workflow znajduje sie w `.github/workflows/ci.yml` i oferuje:
+
+- automatyczne uruchamianie testow na `push` i `pull_request`,
+- reczne uruchamianie z poziomu zakladki **Actions** (`workflow_dispatch`),
+- opcjonalne reczne odpalenie pelnego scrapera (`run_scraper=true`).
+
+Po dodaniu sekretu `GOOGLE_API_KEY` w ustawieniach repo mozna uruchomic scraper recznie z GitHub Actions.

@@ -3,8 +3,11 @@ import re
 import time
 import json
 import logging
+import os
 from pathlib import Path
 from urllib.parse import quote_plus, urljoin
+from urllib.request import Request, urlopen
+from urllib.error import URLError, HTTPError
 
 from selenium import webdriver
 from selenium.webdriver.common.by import By
@@ -17,7 +20,12 @@ from webdriver_manager.chrome import ChromeDriverManager
 # =========================
 # KONFIG
 # =========================
-OUTPUT_DIR = Path(r"C:\Users\kanbu\Documents\Budowy")
+try:
+    PROJECT_ROOT = Path(__file__).resolve().parent
+except NameError:
+    # Jupyter/interactive mode: __file__ is not available.
+    PROJECT_ROOT = Path.cwd()
+OUTPUT_DIR = PROJECT_ROOT / "Wyniki"
 OUTPUT_FILE = OUTPUT_DIR / "germany_markets_selenium_closed_only.csv"
 CACHE_FILE = OUTPUT_DIR / "germany_markets_cache.json"
 LOG_FILE = OUTPUT_DIR / "germany_markets_scraper.log"
@@ -34,6 +42,11 @@ MAX_SCROLL_ROUNDS = 25
 SCROLL_PAUSE = 1.0
 HEADLESS_DEFAULT = True
 CAPTCHA_CHECK_TIMEOUT = 600  # sekundy
+GEMINI_API_KEY = os.getenv("GOOGLE_API_KEY", "").strip()
+GEMINI_MODEL = os.getenv("GEMINI_MODEL", "gemini-1.5-flash")
+GEMINI_TIMEOUT = 25
+GEMINI_CALLS_PER_RECORD = 3
+_GEMINI_MISSING_KEY_WARNED = False
 
 
 class CaptchaRequired(Exception):
@@ -103,8 +116,12 @@ def save_csv(rows, path):
         "telefon",
         "www",
         "url",
-        "lat_center",
-        "lon_center",
+        # UWAGA: sklepy należy grupować po kolumnie "grupa_generalnego_wykonawcy".
+        "generalny_wykonawca",
+        "grupa_generalnego_wykonawcy",
+        # Dodatkowe grupowanie: wykonawca w podziale na niemieckie landy.
+        "land_niemiecki",
+        "grupa_wykonawcy_w_landzie",
     ]
     with open(path, "w", newline="", encoding="utf-8-sig") as f:
         writer = csv.DictWriter(f, fieldnames=fields, delimiter=";")
@@ -371,6 +388,139 @@ def is_closed_status(status: str) -> bool:
     )
 
 
+def get_general_contractor_with_gemini(brand, name, full_address, address, logger):
+    global _GEMINI_MISSING_KEY_WARNED
+
+    if not GEMINI_API_KEY:
+        if not _GEMINI_MISSING_KEY_WARNED:
+            logger.warning(
+                "Brak GEMINI_API_KEY. Pole 'generalny_wykonawca' pozostanie puste."
+            )
+            _GEMINI_MISSING_KEY_WARNED = True
+        return ""
+
+    location = full_address or address or ""
+    prompt = (
+        "Zwróć wyłącznie nazwę Generalnego Wykonawcy (firma budowlana), "
+        "jeśli da się ją wiarygodnie ustalić dla poniższego sklepu. "
+        "Jeśli brak wiarygodnych danych, zwróć dokładnie: BRAK_DANYCH.\n\n"
+        f"Marka sklepu: {brand}\n"
+        f"Nazwa sklepu: {name}\n"
+        f"Adres: {location}\n"
+    )
+
+    endpoint = (
+        f"https://generativelanguage.googleapis.com/v1beta/models/{GEMINI_MODEL}:generateContent"
+        f"?key={GEMINI_API_KEY}"
+    )
+    payload = {
+        "contents": [{"parts": [{"text": prompt}]}],
+        "generationConfig": {"temperature": 0.1, "maxOutputTokens": 120},
+    }
+
+    responses = []
+    for _ in range(GEMINI_CALLS_PER_RECORD):
+        try:
+            req = Request(
+                endpoint,
+                data=json.dumps(payload).encode("utf-8"),
+                headers={"Content-Type": "application/json"},
+                method="POST",
+            )
+            with urlopen(req, timeout=GEMINI_TIMEOUT) as response:
+                data = json.loads(response.read().decode("utf-8"))
+        except (HTTPError, URLError, TimeoutError, json.JSONDecodeError) as e:
+            logger.warning(f"Gemini API - błąd dla sklepu '{name}': {e}")
+            continue
+        except Exception as e:
+            logger.warning(f"Gemini API - nieoczekiwany błąd dla sklepu '{name}': {e}")
+            continue
+
+        text = ""
+        candidates = data.get("candidates", [])
+        if candidates:
+            parts = candidates[0].get("content", {}).get("parts", [])
+            if parts:
+                text = (parts[0].get("text") or "").strip()
+
+        if text and text.upper() != "BRAK_DANYCH":
+            cleaned = text.replace("\n", " ").strip().strip('"')
+            if cleaned:
+                responses.append(cleaned)
+
+    if not responses:
+        return ""
+
+    # Zwróć najczęściej powtarzającą się odpowiedź z 3 wywołań.
+    return max(set(responses), key=responses.count)
+
+
+def get_german_state_with_gemini(brand, name, full_address, address, logger):
+    global _GEMINI_MISSING_KEY_WARNED
+
+    if not GEMINI_API_KEY:
+        if not _GEMINI_MISSING_KEY_WARNED:
+            logger.warning(
+                "Brak GEMINI_API_KEY. Pole 'land_niemiecki' pozostanie puste."
+            )
+            _GEMINI_MISSING_KEY_WARNED = True
+        return ""
+
+    location = full_address or address or ""
+    prompt = (
+        "Zwróć wyłącznie nazwę niemieckiego landu (Bundesland) dla poniższego sklepu. "
+        "Użyj standardowej nazwy landu po niemiecku, np. Bayern, Nordrhein-Westfalen, Sachsen. "
+        "Jeśli brak wiarygodnych danych, zwróć dokładnie: BRAK_DANYCH.\n\n"
+        f"Marka sklepu: {brand}\n"
+        f"Nazwa sklepu: {name}\n"
+        f"Adres: {location}\n"
+    )
+
+    endpoint = (
+        f"https://generativelanguage.googleapis.com/v1beta/models/{GEMINI_MODEL}:generateContent"
+        f"?key={GEMINI_API_KEY}"
+    )
+    payload = {
+        "contents": [{"parts": [{"text": prompt}]}],
+        "generationConfig": {"temperature": 0.0, "maxOutputTokens": 80},
+    }
+
+    responses = []
+    for _ in range(GEMINI_CALLS_PER_RECORD):
+        try:
+            req = Request(
+                endpoint,
+                data=json.dumps(payload).encode("utf-8"),
+                headers={"Content-Type": "application/json"},
+                method="POST",
+            )
+            with urlopen(req, timeout=GEMINI_TIMEOUT) as response:
+                data = json.loads(response.read().decode("utf-8"))
+        except (HTTPError, URLError, TimeoutError, json.JSONDecodeError) as e:
+            logger.warning(f"Gemini API - błąd landu dla sklepu '{name}': {e}")
+            continue
+        except Exception as e:
+            logger.warning(f"Gemini API - nieoczekiwany błąd landu dla sklepu '{name}': {e}")
+            continue
+
+        text = ""
+        candidates = data.get("candidates", [])
+        if candidates:
+            parts = candidates[0].get("content", {}).get("parts", [])
+            if parts:
+                text = (parts[0].get("text") or "").strip()
+
+        if text and text.upper() != "BRAK_DANYCH":
+            cleaned = text.replace("\n", " ").strip().strip('"')
+            if cleaned:
+                responses.append(cleaned)
+
+    if not responses:
+        return ""
+
+    return max(set(responses), key=responses.count)
+
+
 def extract_details_in_new_tab(driver, url):
     phone = ""
     website = ""
@@ -558,6 +708,25 @@ def scrape_brand_cell(driver, brand, lat, lon, cache, logger):
         )
 
         status = status_from_detail if status_from_detail else status_from_list
+        general_contractor = get_general_contractor_with_gemini(
+            brand=brand.upper(),
+            name=name,
+            full_address=full_address,
+            address=address,
+            logger=logger,
+        )
+        german_state = get_german_state_with_gemini(
+            brand=brand.upper(),
+            name=name,
+            full_address=full_address,
+            address=address,
+            logger=logger,
+        )
+        contractor_group_by_state = (
+            f"{german_state} | {general_contractor}"
+            if german_state and general_contractor
+            else ""
+        )
 
         rows.append(
             {
@@ -574,6 +743,10 @@ def scrape_brand_cell(driver, brand, lat, lon, cache, logger):
                 "url": place_url,
                 "lat_center": lat,
                 "lon_center": lon,
+                "generalny_wykonawca": general_contractor,
+                "grupa_generalnego_wykonawcy": general_contractor,
+                "land_niemiecki": german_state,
+                "grupa_wykonawcy_w_landzie": contractor_group_by_state,
             }
         )
 
@@ -648,6 +821,7 @@ def run_scraper(headless_default=HEADLESS_DEFAULT, jupyter_mode=None):
         logger.info("Zamknięto przeglądarkę.")
 
     logger.info(f"Gotowe. Zapisano {len(all_rows)} rekordów (zamknięte) do: {OUTPUT_FILE}")
+    logger.info('UWAGA: sklepy należy pogrupować po kolumnie "grupa_generalnego_wykonawcy".')
     print(f"\nGotowe. Zapisano {len(all_rows)} rekordów (zamknięte) do: {OUTPUT_FILE}")
 
 

@@ -116,6 +116,8 @@ def save_csv(rows, path):
         "telefon",
         "www",
         "url",
+        "lat_center",
+        "lon_center",
         # UWAGA: sklepy należy grupować po kolumnie "grupa_generalnego_wykonawcy".
         "generalny_wykonawca",
         "grupa_generalnego_wykonawcy",

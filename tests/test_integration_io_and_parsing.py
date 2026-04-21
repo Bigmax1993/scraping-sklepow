@@ -37,6 +37,8 @@ def test_save_and_load_csv_roundtrip(tmp_path, monkeypatch):
             "telefon": "+49 111 222",
             "www": "https://example.org",
             "url": "https://maps.google.com/place/1",
+            "lat_center": "",
+            "lon_center": "",
             "generalny_wykonawca": "Firma A",
             "grupa_generalnego_wykonawcy": "Firma A",
             "land_niemiecki": "Berlin",

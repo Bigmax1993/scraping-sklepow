@@ -346,22 +346,24 @@ def extract_open_status(text: str) -> str:
     t = " ".join(text.split()).strip()
     tl = t.lower()
 
-    if "otwarte" in tl:
-        return "Otwarte"
+    # Priorytet: status "tymczasowo zamknięte" musi wygrać z ogólnym "zamknięte".
     if "tymczasowo zamknięte" in tl or "tymczasowo zamkniete" in tl:
         return "Tymczasowo zamknięte"
+    if "vorübergehend geschlossen" in tl or "voruebergehend geschlossen" in tl:
+        return "Vorübergehend geschlossen"
+    if "temporarily closed" in tl:
+        return "Temporarily closed"
+
+    if "otwarte" in tl:
+        return "Otwarte"
     if "zamknięte" in tl or "zamkniete" in tl:
         return "Zamknięte"
 
     if "geöffnet" in tl or "geoeffnet" in tl:
         return "Geöffnet"
-    if "vorübergehend geschlossen" in tl or "voruebergehend geschlossen" in tl:
-        return "Vorübergehend geschlossen"
     if "geschlossen" in tl:
         return "Geschlossen"
 
-    if "temporarily closed" in tl:
-        return "Temporarily closed"
     if "open" in tl:
         return "Open"
     if "closed" in tl:

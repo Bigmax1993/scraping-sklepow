@@ -2,6 +2,8 @@ import pytest
 
 from scraper import extract_open_status, is_closed_status
 
+pytestmark = pytest.mark.unit
+
 
 @pytest.mark.parametrize(
     "text,expected",

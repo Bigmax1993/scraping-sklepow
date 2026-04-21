@@ -11,6 +11,10 @@ from scraper import (
     wait_for_user_confirmation,
 )
 
+import pytest
+
+pytestmark = pytest.mark.unit
+
 
 def test_is_captcha_page_detects_sorry_url():
     driver = Mock()

@@ -122,6 +122,19 @@ Każde uruchomienie **nadpisuje** pliki wynikowe od zera — dane nie są dopisy
 
 ---
 
+## Pomijanie już wyeksportowanych rekordów
+
+Przy **kolejnym uruchomieniu** scraper **nie dodaje ponownie** do JSON/Excel rekordów, które były już wyeksportowane.
+
+- Przed startem wczytuje rejestr `neueroeffnung_processed.json` (klucz: nazwa + adres z listy + data otwarcia).
+- Jeśli istnieje poprzedni `neueroeffnung_wynik.json`, importuje z niego wpisy do rejestru, **potem** usuwa stary JSON/Excel.
+- Podczas scrapingu pomija znane rekordy **bez ponownego pobierania** stron.
+- Po udanym eksporcie do Excela dopisuje nowe rekordy do rejestru.
+
+Rekordy pominięte trafiają do arkusza **Skipped** z powodem `Already exported in previous run`.
+
+---
+
 ## Filtr dat otwarcia
 
 Do wyników trafiają tylko wpisy z datą otwarcia w zakresie:
@@ -158,6 +171,7 @@ Cache wyników Maps: `neueroeffnung_maps_cache.json` (nie jest usuwany przy każ
 |------|------|
 | `neueroeffnung_detail_cache.json` | Cache stron szczegółów (adres, daty, informacja) |
 | `neueroeffnung_maps_cache.json` | Cache adresów z Google Maps |
+| `neueroeffnung_processed.json` | Rejestr rekordów już wyeksportowanych do Excel |
 | `neueroeffnung_scraper.log` | Szczegółowy log |
 
 Przy problemach z brakującymi danymi usuń cache i uruchom ponownie:

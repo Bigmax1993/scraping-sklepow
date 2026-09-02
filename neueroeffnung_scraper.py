@@ -36,6 +36,7 @@ SCRIPT_DIR = Path(__file__).resolve().parent
 OUTPUT_FILE = SCRIPT_DIR / "neueroeffnung_wynik.xlsx"
 JSON_OUTPUT_FILE = SCRIPT_DIR / "neueroeffnung_wynik.json"
 VALIDATION_REPORT_FILE = SCRIPT_DIR / "neueroeffnung_raport_brakow.json"
+PROCESSED_RECORDS_FILE = SCRIPT_DIR / "neueroeffnung_processed.json"
 CACHE_FILE = SCRIPT_DIR / "neueroeffnung_detail_cache.json"
 LOG_FILE = SCRIPT_DIR / "neueroeffnung_scraper.log"
 
@@ -53,6 +54,7 @@ SHEET_VALIDATION_REPORT = "Validation report"
 SHEET_SKIPPED = "Skipped"
 SKIP_REASON_OUT_OF_RANGE = "Opening date outside Q3 2026 – Q4 2028"
 SKIP_REASON_WORKING_HOURS = "Contains working hours"
+SKIP_REASON_ALREADY_EXPORTED = "Already exported in previous run"
 
 HEADERS = {
     "User-Agent": (
@@ -285,6 +287,128 @@ def prepare_fresh_output_files(logger: logging.Logger) -> None:
         if path.exists():
             path.unlink()
             logger.info("Usunięto poprzedni plik wynikowy: %s", path.name)
+
+
+def listing_fingerprint(item: ListingItem) -> str:
+    """Stabilny klucz rekordu — ten sam co przy deduplikacji listy."""
+    return "|".join(
+        (
+            item.nazwa.lower().strip(),
+            item.adres_lista.lower().strip(),
+            item.data_otwarcia.lower().strip(),
+        )
+    )
+
+
+def record_fingerprint(record: Record) -> str:
+    """Stabilny klucz rekordu do rejestru już wyeksportowanych wpisów."""
+    location = (record.listing_adres_lista or record.adres).lower().strip()
+    return "|".join(
+        (
+            record.nazwa_firmy.lower().strip(),
+            location,
+            record.data_otwarcia.lower().strip(),
+        )
+    )
+
+
+def load_processed_records(logger: logging.Logger) -> set[str]:
+    if not PROCESSED_RECORDS_FILE.exists():
+        return set()
+    try:
+        with open(PROCESSED_RECORDS_FILE, "r", encoding="utf-8") as f:
+            payload = json.load(f)
+        fingerprints = payload.get("fingerprints", [])
+        logger.info("Wczytano rejestr wyeksportowanych rekordów: %s wpisów", len(fingerprints))
+        return set(fingerprints)
+    except Exception as exc:
+        logger.warning("Nie wczytano rejestru wyeksportowanych rekordów: %s", exc)
+        return set()
+
+
+def save_processed_records(processed: set[str], logger: logging.Logger) -> None:
+    try:
+        payload = {
+            "updated_at": datetime.now().isoformat(timespec="seconds"),
+            "fingerprints": sorted(processed),
+        }
+        with open(PROCESSED_RECORDS_FILE, "w", encoding="utf-8") as f:
+            json.dump(payload, f, ensure_ascii=False, indent=2)
+        logger.info("Zapisano rejestr wyeksportowanych rekordów: %s wpisów", len(processed))
+    except Exception as exc:
+        logger.error("Błąd zapisu rejestru wyeksportowanych rekordów: %s", exc)
+
+
+def import_processed_from_json(
+    json_path: Path,
+    processed: set[str],
+    logger: logging.Logger,
+) -> None:
+    """Przed usunięciem poprzedniego JSON — zapamiętuje rekordy jako już wyeksportowane."""
+    if not json_path.exists():
+        return
+    try:
+        sheets = load_json_dataset(json_path, logger)
+        added = 0
+        for records in sheets.values():
+            for record in records:
+                fp = record_fingerprint(record)
+                if fp not in processed:
+                    processed.add(fp)
+                    added += 1
+        if added:
+            logger.info(
+                "Zaimportowano %s rekordów z poprzedniego JSON do rejestru wyeksportowanych.",
+                added,
+            )
+    except Exception as exc:
+        logger.warning("Nie zaimportowano poprzedniego JSON do rejestru: %s", exc)
+
+
+def filter_already_processed_records(
+    sheets: dict[str, list[Record]],
+    processed: set[str],
+    skipped: list[SkippedRecord],
+    logger: logging.Logger,
+) -> dict[str, list[Record]]:
+    """Usuwa rekordy już wyeksportowane w poprzednich runach (JSON/Excel)."""
+    removed = 0
+    for category_name in DATA_SHEET_NAMES:
+        kept: list[Record] = []
+        for record in sheets.get(category_name, []):
+            fp = record_fingerprint(record)
+            if fp not in processed:
+                kept.append(record)
+                continue
+            removed += 1
+            logger.info(
+                "  Pominięto (już wyeksportowany): %s | %s",
+                record.nazwa_firmy,
+                record.data_otwarcia,
+            )
+            skipped.append(
+                SkippedRecord(
+                    kategoria=category_name,
+                    nazwa_firmy=record.nazwa_firmy,
+                    adres=record.adres,
+                    data_otwarcia=record.data_otwarcia,
+                    typ_wpisu=record.typ_wpisu,
+                    powod=SKIP_REASON_ALREADY_EXPORTED,
+                )
+            )
+        sheets[category_name] = kept
+    if removed:
+        logger.info("Pominięto %s rekordów już obecnych w poprzednim JSON/Excel.", removed)
+    return sheets
+
+
+def mark_records_as_processed(
+    sheets: dict[str, list[Record]],
+    processed: set[str],
+) -> None:
+    for category_name in DATA_SHEET_NAMES:
+        for record in sheets.get(category_name, []):
+            processed.add(record_fingerprint(record))
 
 
 def load_cache(logger: logging.Logger) -> dict:
@@ -989,6 +1113,7 @@ def collect_category_records(
     logger: logging.Logger,
     category_name: str = "",
     skipped: list[SkippedRecord] | None = None,
+    processed: set[str] | None = None,
 ) -> list[Record]:
     records: list[Record] = []
     seen: set[tuple[str, str, str]] = set()
@@ -1000,6 +1125,27 @@ def collect_category_records(
                 continue
 
             seen.add(key)
+            if processed is not None:
+                fp = listing_fingerprint(item)
+                if fp in processed:
+                    logger.info(
+                        "  Pominięto (już wyeksportowany, bez pobierania): %s | %s",
+                        item.nazwa,
+                        item.data_otwarcia,
+                    )
+                    if skipped is not None and category_name:
+                        skipped.append(
+                            SkippedRecord(
+                                kategoria=category_name,
+                                nazwa_firmy=item.nazwa,
+                                adres=item.adres_lista,
+                                data_otwarcia=item.data_otwarcia,
+                                typ_wpisu=format_entry_type(item.entry_type),
+                                powod=SKIP_REASON_ALREADY_EXPORTED,
+                            )
+                        )
+                    continue
+
             record = listing_to_record(session, item, cache, logger)
             record.kategoria = category_name
             if not is_opening_date_in_range(record.data_otwarcia):
@@ -1459,8 +1605,15 @@ def write_excel(
 def run_scraper() -> None:
     logger = setup_logging()
     logger.info("=== START scrapera neueroeffnung.info ===")
+
+    processed_records = load_processed_records(logger)
+    import_processed_from_json(JSON_OUTPUT_FILE, processed_records, logger)
     prepare_fresh_output_files(logger)
-    logger.info("Tryb zapisu: pełne nadpisanie tabel (bez dopisywania do poprzednich wyników)")
+
+    logger.info(
+        "Tryb zapisu: tylko nowe rekordy (pomijanie %s już wyeksportowanych)",
+        len(processed_records),
+    )
     logger.info(
         "Filtr dat otwarcia: Q3 2026 (%s) – Q4 2028 (%s)",
         OPENING_FILTER_START.isoformat(),
@@ -1476,7 +1629,13 @@ def run_scraper() -> None:
     for sheet_name, url in CATEGORIES.items():
         logger.info("--- Kategoria: %s ---", sheet_name)
         sheets[sheet_name] = collect_category_records(
-            session, url, cache, logger, category_name=sheet_name, skipped=skipped
+            session,
+            url,
+            cache,
+            logger,
+            category_name=sheet_name,
+            skipped=skipped,
+            processed=processed_records,
         )
 
     logger.info("--- Czyszczenie danych (lokalne) ---")
@@ -1486,6 +1645,9 @@ def run_scraper() -> None:
 
     logger.info("--- Twardy filtr dat otwarcia ---")
     sheets = purge_out_of_range_records(sheets, skipped, logger)
+
+    logger.info("--- Pomijanie już wyeksportowanych rekordów ---")
+    sheets = filter_already_processed_records(sheets, processed_records, skipped, logger)
 
     logger.info("--- Zapis JSON (po scrapingu) ---")
     save_json_dataset(sheets, JSON_OUTPUT_FILE, logger, stage="po_scrapingu")
@@ -1532,6 +1694,9 @@ def run_scraper() -> None:
     skipped.extend(collect_verification_skipped(sheets))
 
     write_excel(sheets, skipped, OUTPUT_FILE, logger)
+
+    mark_records_as_processed(sheets, processed_records)
+    save_processed_records(processed_records, logger)
 
     logger.info("--- Wysyłka e-mail z wynikiem ---")
     try:

@@ -1,7 +1,7 @@
 """
-Drugą warstwa uzupełniania adresów — Google Maps przez Playwright (headless).
+Weryfikacja i uzupełnianie rekordów przez Google Maps (Playwright, headless).
 
-Używana gdy adres w JSON/rekordzie jest niepełny (np. tylko „80331 München”).
+Dla każdego rekordu: wyszukiwanie miejsca, weryfikacja adresu, odczyt godzin otwarcia.
 """
 
 from __future__ import annotations
@@ -11,6 +11,7 @@ import logging
 import os
 import re
 import time
+from dataclasses import asdict, dataclass
 from pathlib import Path
 from urllib.parse import quote_plus
 
@@ -19,6 +20,32 @@ MAPS_CACHE_FILE = SCRIPT_DIR / "neueroeffnung_maps_cache.json"
 MAPS_REQUEST_DELAY_SEC = 1.5
 MAPS_PAGE_TIMEOUT_MS = 25_000
 PLZ_PATTERN = re.compile(r"\b(\d{4,5})\b")
+
+
+@dataclass
+class MapsPlaceResult:
+    adres: str = ""
+    godziny_pracy: str = ""
+    verified: bool = False
+    query: str = ""
+
+    @classmethod
+    def from_cache(cls, data: dict) -> MapsPlaceResult:
+        return cls(
+            adres=data.get("adres", ""),
+            godziny_pracy=data.get("godziny_pracy", ""),
+            verified=bool(data.get("verified")),
+            query=data.get("query", ""),
+        )
+
+    def to_cache(self) -> dict:
+        return {
+            "adres": self.adres,
+            "godziny_pracy": self.godziny_pracy,
+            "verified": self.verified,
+            "query": self.query,
+            "not_found": not self.verified,
+        }
 
 
 def is_enrichment_enabled() -> bool:
@@ -89,6 +116,12 @@ def normalize_maps_address(raw: str) -> str:
     return text.strip(" ·•")
 
 
+def normalize_opening_hours(raw: str) -> str:
+    text = " ".join((raw or "").split()).strip()
+    text = re.sub(r"^(Hours|Opening hours|Öffnungszeiten|Godziny otwarcia):\s*", "", text, flags=re.I)
+    return text.strip(" ·•")
+
+
 class GoogleMapsEnricher:
     """Playwright w tle — jedna sesja przeglądarki na cały batch rekordów."""
 
@@ -133,30 +166,35 @@ class GoogleMapsEnricher:
     def cache_key(self, company_name: str, partial_address: str) -> str:
         return f"maps::{company_name.strip()}::{partial_address.strip()}"
 
-    def resolve_address(self, company_name: str, partial_address: str) -> str:
+    def verify_place(self, company_name: str, partial_address: str) -> MapsPlaceResult:
         query = build_search_query(company_name, partial_address)
         if not query:
-            return ""
+            return MapsPlaceResult(query=query)
 
         key = self.cache_key(company_name, partial_address)
         cached = self.cache.get(key, {})
-        if cached.get("adres"):
+        if cached.get("verified") or cached.get("adres") or cached.get("godziny_pracy"):
             self.logger.info("  Maps cache hit: %s", query)
-            return cached["adres"]
+            return MapsPlaceResult.from_cache(cached)
         if cached.get("not_found"):
             self.logger.info("  Maps cache (brak wyniku): %s", query)
-            return ""
+            return MapsPlaceResult(query=query)
 
         if self._page is None:
             raise RuntimeError("GoogleMapsEnricher must be used as context manager")
 
         self.logger.info("  Google Maps: %s", query)
-        address = self._lookup_address(query, company_name, partial_address)
-        self.cache[key] = {"adres": address, "query": query, "not_found": not bool(address)}
+        result = self._lookup_place(query, company_name, partial_address)
+        result.query = query
+        self.cache[key] = result.to_cache()
         time.sleep(MAPS_REQUEST_DELAY_SEC)
-        return address
+        return result
 
-    def _lookup_address(self, query: str, company_name: str, partial_address: str) -> str:
+    def resolve_address(self, company_name: str, partial_address: str) -> str:
+        """Kompatybilność wsteczna — zwraca tylko adres."""
+        return self.verify_place(company_name, partial_address).adres
+
+    def _lookup_place(self, query: str, company_name: str, partial_address: str) -> MapsPlaceResult:
         page = self._page
         search_url = f"https://www.google.com/maps/search/{quote_plus(query)}"
         try:
@@ -164,23 +202,32 @@ class GoogleMapsEnricher:
             self._dismiss_consent(page)
             page.wait_for_timeout(1200)
 
-            address = self._read_address_from_place_panel(page)
-            if address:
-                self.logger.info("  -> Maps: %s", address)
-                return address
+            result = self._read_place_panel(page)
+            if result.adres or result.godziny_pracy:
+                result.verified = True
+                self._log_place_result(result, query)
+                return result
 
             self._click_best_search_result(page, company_name, partial_address)
             page.wait_for_timeout(1200)
-            address = self._read_address_from_place_panel(page)
-            if address:
-                self.logger.info("  -> Maps (lista): %s", address)
-                return address
+            result = self._read_place_panel(page)
+            if result.adres or result.godziny_pracy:
+                result.verified = True
+                self._log_place_result(result, query, from_list=True)
+                return result
 
-            self.logger.warning("  -> Maps: brak adresu dla: %s", query)
-            return ""
+            self.logger.warning("  -> Maps: brak danych dla: %s", query)
+            return MapsPlaceResult(query=query)
         except Exception as exc:
             self.logger.warning("  -> Maps błąd dla '%s': %s", query, exc)
-            return ""
+            return MapsPlaceResult(query=query)
+
+    def _log_place_result(self, result: MapsPlaceResult, query: str, *, from_list: bool = False) -> None:
+        suffix = " (lista)" if from_list else ""
+        if result.adres:
+            self.logger.info("  -> Maps%s adres: %s", suffix, result.adres)
+        if result.godziny_pracy:
+            self.logger.info("  -> Maps%s godziny: %s", suffix, result.godziny_pracy)
 
     def _dismiss_consent(self, page) -> None:
         for selector in (
@@ -197,6 +244,12 @@ class GoogleMapsEnricher:
                     return
             except Exception:
                 continue
+
+    def _read_place_panel(self, page) -> MapsPlaceResult:
+        return MapsPlaceResult(
+            adres=self._read_address_from_place_panel(page),
+            godziny_pracy=self._read_opening_hours_from_place_panel(page),
+        )
 
     def _read_address_from_place_panel(self, page) -> str:
         selectors = (
@@ -230,6 +283,42 @@ class GoogleMapsEnricher:
                 continue
         return ""
 
+    def _read_opening_hours_from_place_panel(self, page) -> str:
+        selectors = (
+            'div[aria-label*="Opening hours"]',
+            'div[aria-label*="Öffnungszeiten"]',
+            'button[data-item-id="oh"] div.fontBodyMedium',
+            'button[data-item-id="oh"]',
+            '[data-item-id="oh"] .Io6YTe',
+            'button[aria-label^="Hours:"]',
+            'button[aria-label^="Öffnungszeiten:"]',
+        )
+        for selector in selectors:
+            try:
+                locator = page.locator(selector).first
+                if locator.count() == 0:
+                    continue
+                text = normalize_opening_hours(locator.inner_text(timeout=4000))
+                if text and _looks_like_opening_hours(text):
+                    return text
+            except Exception:
+                continue
+
+        for selector in ('button[aria-label^="Hours:"]', 'button[aria-label^="Öffnungszeiten:"]'):
+            try:
+                locator = page.locator(selector).first
+                if locator.count() == 0:
+                    continue
+                aria = locator.get_attribute("aria-label") or ""
+                text = normalize_opening_hours(
+                    re.sub(r"^(Hours|Opening hours|Öffnungszeiten):\s*", "", aria, flags=re.I)
+                )
+                if text and _looks_like_opening_hours(text):
+                    return text
+            except Exception:
+                continue
+        return ""
+
     def _click_best_search_result(self, page, company_name: str, partial_address: str) -> None:
         results = page.locator('a[href*="/maps/place"]')
         count = results.count()
@@ -255,3 +344,12 @@ class GoogleMapsEnricher:
             return
 
         results.nth(best_idx).click(timeout=5000)
+
+
+def _looks_like_opening_hours(text: str) -> bool:
+    lowered = text.lower()
+    if re.search(r"\d{1,2}:\d{2}", text):
+        return True
+    if re.search(r"\b(mo|montag|di|dienstag|mi|mittwoch|do|donnerstag|fr|freitag|sa|samstag|so|sonntag)\b", lowered):
+        return True
+    return any(token in lowered for token in ("öffnungszeiten", "opening hours", "geschlossen", "24 hours", "24 stunden"))

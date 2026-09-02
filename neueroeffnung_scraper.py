@@ -4,7 +4,7 @@ Scraper neueroeffnung.info → JSON → Walidacja → Excel
 Kategorie (Excel): Markets, Restaurants, Drugstores, Shopping centers
 Analityka: Schedule, By region, Validation report, Skipped
 
-Pipeline: Scraping → JSON → Walidacja (+ retry) → Google Maps (Playwright) → Excel
+Pipeline: Scraping → JSON → Walidacja (+ retry) → Google Maps (wszystkie rekordy) → filtr godzin pracy → Excel
 Kolumny Excel (EN): Company name | Address | Closing date | Opening date | Information | Entry type | Validation status | Missing fields
 """
 
@@ -52,6 +52,7 @@ SHEET_BY_REGION = "By region"
 SHEET_VALIDATION_REPORT = "Validation report"
 SHEET_SKIPPED = "Skipped"
 SKIP_REASON_OUT_OF_RANGE = "Opening date outside Q3 2026 – Q4 2028"
+SKIP_REASON_WORKING_HOURS = "Contains working hours"
 
 HEADERS = {
     "User-Agent": (
@@ -209,6 +210,19 @@ CLOSING_PATTERNS = [
         re.I,
     ),
 ]
+WORKING_HOURS_TEXT_PATTERNS = (
+    re.compile(r"öffnungszeiten", re.I),
+    re.compile(r"opening hours", re.I),
+    re.compile(r"geschäftszeiten", re.I),
+    re.compile(r"godziny otwarcia", re.I),
+    re.compile(r"\bmo\.?\s*[-–]\s*(fr|sa|so)\b", re.I),
+    re.compile(r"\b(mo|di|mi|do|fr|sa|so)\s+\d{1,2}:\d{2}", re.I),
+    re.compile(
+        r"\b(montag|dienstag|mittwoch|donnerstag|freitag|samstag|sonntag)\b[^\n]{0,40}\d{1,2}:\d{2}",
+        re.I,
+    ),
+    re.compile(r"\d{1,2}:\d{2}\s*[-–]\s*\d{1,2}:\d{2}"),
+)
 
 
 @dataclass
@@ -235,6 +249,8 @@ class Record:
     status_walidacji: str = VALIDATION_STATUS_OK
     brakujace_pola: str = ""
     proby_ponowienia: int = 0
+    godziny_pracy: str = ""
+    maps_zweryfikowany: bool = False
 
 
 @dataclass
@@ -344,6 +360,8 @@ def clean_record(record: Record, logger: logging.Logger) -> Record:
         status_walidacji=record.status_walidacji,
         brakujace_pola=record.brakujace_pola,
         proby_ponowienia=record.proby_ponowienia,
+        godziny_pracy=clean_text_local(record.godziny_pracy),
+        maps_zweryfikowany=record.maps_zweryfikowany,
     )
 
 
@@ -542,6 +560,64 @@ def purge_out_of_range_records(
         sheets[category_name] = kept
     if removed:
         logger.info("Twardy filtr dat: usunięto %s rekordów spoza zakresu.", removed)
+    return sheets
+
+
+def contains_working_hours(record: Record) -> bool:
+    """True gdy rekord zawiera godziny pracy (pole Maps lub wzorzec w tekście JSON)."""
+    if clean_text_local(record.godziny_pracy):
+        return True
+    for value in (
+        record.nazwa_firmy,
+        record.adres,
+        record.informacja,
+        record.listing_adres_lista,
+    ):
+        text = clean_text_local(value)
+        if not text:
+            continue
+        for pattern in WORKING_HOURS_TEXT_PATTERNS:
+            if pattern.search(text):
+                return True
+    return False
+
+
+def purge_records_with_working_hours(
+    sheets: dict[str, list[Record]],
+    skipped: list[SkippedRecord],
+    logger: logging.Logger,
+) -> dict[str, list[Record]]:
+    """
+    Twarda reguła przed Excel: rekordy z godzinami pracy w JSON
+    nie trafiają do Excela — tylko do arkusza Skipped.
+    """
+    removed = 0
+    for category_name in DATA_SHEET_NAMES:
+        kept: list[Record] = []
+        for record in sheets.get(category_name, []):
+            if not contains_working_hours(record):
+                kept.append(record)
+                continue
+            removed += 1
+            logger.info(
+                "  Odrzucono (godziny pracy): %s | %s | %s",
+                category_name,
+                record.nazwa_firmy,
+                record.godziny_pracy or record.informacja[:80],
+            )
+            skipped.append(
+                SkippedRecord(
+                    kategoria=category_name,
+                    nazwa_firmy=record.nazwa_firmy,
+                    adres=record.adres,
+                    data_otwarcia=record.data_otwarcia,
+                    typ_wpisu=record.typ_wpisu,
+                    powod=SKIP_REASON_WORKING_HOURS,
+                )
+            )
+        sheets[category_name] = kept
+    if removed:
+        logger.info("Twardy filtr godzin pracy: usunięto %s rekordów przed eksportem do Excel.", removed)
     return sheets
 
 
@@ -1128,11 +1204,11 @@ def run_validation_pipeline(
     return sheets, summary
 
 
-def run_maps_enrichment_pipeline(
+def run_maps_verification_pipeline(
     sheets: dict[str, list[Record]],
     logger: logging.Logger,
 ) -> dict[str, list[Record]]:
-    """Uzupełnia niepełne adresy przez Google Maps (Playwright, headless)."""
+    """Weryfikuje i uzupełnia wszystkie rekordy JSON przez Google Maps (Playwright, headless)."""
     from google_maps_enricher import (
         GoogleMapsEnricher,
         is_enrichment_enabled,
@@ -1141,40 +1217,51 @@ def run_maps_enrichment_pipeline(
     )
 
     if not is_enrichment_enabled():
-        logger.info("Google Maps enrichment wyłączone (ENABLE_GOOGLE_MAPS_ENRICHMENT=false)")
+        logger.info("Google Maps verification wyłączone (ENABLE_GOOGLE_MAPS_ENRICHMENT=false)")
         return sheets
 
-    to_enrich: list[tuple[str, int]] = []
-    for category_name in DATA_SHEET_NAMES:
-        for idx, record in enumerate(sheets.get(category_name, [])):
-            if is_incomplete_address(record.adres):
-                to_enrich.append((category_name, idx))
-
-    if not to_enrich:
-        logger.info("Google Maps: brak rekordów z niepełnym adresem.")
+    total = sum(len(sheets.get(name, [])) for name in DATA_SHEET_NAMES)
+    if total == 0:
+        logger.info("Google Maps: brak rekordów do weryfikacji.")
         return sheets
 
-    logger.info("--- Google Maps: uzupełnianie %s adresów ---", len(to_enrich))
+    logger.info("--- Google Maps: weryfikacja %s rekordów ---", total)
     maps_cache = load_maps_cache(logger)
 
     try:
         with GoogleMapsEnricher(logger, maps_cache) as enricher:
-            for category_name, idx in to_enrich:
-                record = sheets[category_name][idx]
-                partial = record.listing_adres_lista or record.adres
-                resolved = enricher.resolve_address(record.nazwa_firmy, partial)
-                if not resolved or is_incomplete_address(resolved):
-                    continue
-                context = f"{record.nazwa_firmy} | {partial}"
-                record.adres = validate_address(resolved, logger, context)
-                sheets[category_name][idx] = apply_validation_status(record)
-                logger.info("  ✓ Uzupełniono adres: %s → %s", record.nazwa_firmy, record.adres)
+            for category_name in DATA_SHEET_NAMES:
+                for idx, record in enumerate(sheets.get(category_name, [])):
+                    partial = record.listing_adres_lista or record.adres
+                    result = enricher.verify_place(record.nazwa_firmy, partial)
+                    record.maps_zweryfikowany = result.verified
+                    if result.adres:
+                        context = f"{record.nazwa_firmy} | {partial}"
+                        record.adres = validate_address(result.adres, logger, context)
+                    if result.godziny_pracy:
+                        record.godziny_pracy = clean_text_local(result.godziny_pracy)
+                    sheets[category_name][idx] = apply_validation_status(record)
+                    if result.verified:
+                        logger.info(
+                            "  ✓ Maps: %s | adres=%s | godziny=%s",
+                            record.nazwa_firmy,
+                            "tak" if result.adres else "brak",
+                            "tak" if result.godziny_pracy else "brak",
+                        )
     except Exception as exc:
-        logger.error("Google Maps enrichment przerwane: %s", exc)
+        logger.error("Google Maps verification przerwane: %s", exc)
     finally:
         save_maps_cache(maps_cache, logger)
 
     return sheets
+
+
+def run_maps_enrichment_pipeline(
+    sheets: dict[str, list[Record]],
+    logger: logging.Logger,
+) -> dict[str, list[Record]]:
+    """Alias wsteczny — weryfikuje wszystkie rekordy przez Google Maps."""
+    return run_maps_verification_pipeline(sheets, logger)
 
 
 def build_validation_report_rows(sheets: dict[str, list[Record]]) -> list[list]:
@@ -1410,14 +1497,26 @@ def run_scraper() -> None:
     sheets = purge_out_of_range_records(sheets, skipped, logger)
     validation_summary = validate_all_records(sheets)
 
-    logger.info("--- Google Maps (Playwright, headless) ---")
-    sheets = run_maps_enrichment_pipeline(sheets, logger)
+    logger.info("--- Google Maps: weryfikacja wszystkich rekordów ---")
+    sheets = run_maps_verification_pipeline(sheets, logger)
     validation_summary = validate_all_records(sheets)
     logger.info(
         "Po Google Maps: OK=%s, wymaga weryfikacji=%s",
         validation_summary["ok"],
         validation_summary["wymaga_weryfikacji"],
     )
+
+    save_json_dataset(
+        sheets,
+        JSON_OUTPUT_FILE,
+        logger,
+        stage="po_maps",
+        validation_summary=validation_summary,
+    )
+
+    logger.info("--- Twardy filtr godzin pracy (przed Excel) ---")
+    sheets = purge_records_with_working_hours(sheets, skipped, logger)
+    validation_summary = validate_all_records(sheets)
 
     enrich_all_closing_dates(sheets)
 

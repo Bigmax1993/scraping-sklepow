@@ -122,8 +122,12 @@ class TestJsonDataset:
 
 
 class TestMapsEnrichmentPipeline:
-    def test_enriches_incomplete_address(self, silent_logger, monkeypatch):
+    def test_verifies_all_records_via_maps(self, silent_logger, monkeypatch):
         monkeypatch.setenv("ENABLE_GOOGLE_MAPS_ENRICHMENT", "true")
+        complete = _sample_record(
+            adres="Beckrather Straße 39, 41189 Mönchengladbach",
+            status_walidacji=scraper.VALIDATION_STATUS_OK,
+        )
         incomplete = _sample_record(
             nazwa_firmy="Lidl",
             adres="32756 Detmold",
@@ -132,13 +136,26 @@ class TestMapsEnrichmentPipeline:
             brakujace_pola="address (incomplete)",
         )
         sheets = {
-            "Markets": [incomplete],
+            "Markets": [complete, incomplete],
             "Restaurants": [],
             "Drugstores": [],
             "Shopping centers": [],
         }
 
-        class FakeEnricher:
+        from google_maps_enricher import MapsPlaceResult
+
+        def fake_verify(company_name, partial_address):
+            if company_name == "Lidl":
+                return MapsPlaceResult(
+                    adres="Hauptstraße 1, 32756 Detmold",
+                    verified=True,
+                )
+            return MapsPlaceResult(
+                adres="Beckrather Straße 39, 41189 Mönchengladbach",
+                verified=True,
+            )
+
+        class FakeEnricherWithVerify:
             def __init__(self, *args, **kwargs):
                 pass
 
@@ -148,16 +165,16 @@ class TestMapsEnrichmentPipeline:
             def __exit__(self, *args):
                 return False
 
-            def resolve_address(self, company_name, partial_address):
-                return "Hauptstraße 1, 32756 Detmold"
+            verify_place = staticmethod(fake_verify)
 
-        with patch("google_maps_enricher.GoogleMapsEnricher", FakeEnricher):
+        with patch("google_maps_enricher.GoogleMapsEnricher", FakeEnricherWithVerify):
             with patch("google_maps_enricher.load_maps_cache", return_value={}):
                 with patch("google_maps_enricher.save_maps_cache"):
-                    result = scraper.run_maps_enrichment_pipeline(sheets, silent_logger)
+                    result = scraper.run_maps_verification_pipeline(sheets, silent_logger)
 
-        assert result["Markets"][0].adres == "Hauptstraße 1, 32756 Detmold"
-        assert result["Markets"][0].status_walidacji == scraper.VALIDATION_STATUS_OK
+        assert result["Markets"][0].maps_zweryfikowany is True
+        assert result["Markets"][1].adres == "Hauptstraße 1, 32756 Detmold"
+        assert result["Markets"][1].maps_zweryfikowany is True
 
     def test_skips_when_disabled(self, silent_logger, monkeypatch):
         monkeypatch.setenv("ENABLE_GOOGLE_MAPS_ENRICHMENT", "false")

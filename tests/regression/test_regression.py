@@ -98,6 +98,8 @@ class TestRegressionRecordShape:
             "status_walidacji",
             "brakujace_pola",
             "proby_ponowienia",
+            "godziny_pracy",
+            "maps_zweryfikowany",
         )
 
     def test_excel_column_order_unchanged(self, silent_logger, tmp_path):

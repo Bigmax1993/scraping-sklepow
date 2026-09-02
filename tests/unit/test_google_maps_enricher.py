@@ -29,25 +29,52 @@ class TestNormalizeMapsAddress:
         )
 
 
+class TestLooksLikeOpeningHours:
+    @pytest.mark.parametrize(
+        "text,expected",
+        [
+            ("Mo-Fr 9:00-18:00", True),
+            ("Montag 10:00-20:00", True),
+            ("Neueröffnung im September", False),
+            ("Kernsanierung ab August", False),
+        ],
+    )
+    def test_detects_hours_patterns(self, text: str, expected: bool):
+        assert maps._looks_like_opening_hours(text) is expected
+
+
 class TestGoogleMapsEnricher:
-    def test_uses_cache_without_browser(self, silent_logger):
+    def test_verify_place_uses_cache_without_browser(self, silent_logger):
         cache = {
-            "maps::Lidl::32756 Detmold": {"adres": "Hauptstraße 1, 32756 Detmold", "not_found": False},
+            "maps::Lidl::32756 Detmold": {
+                "adres": "Hauptstraße 1, 32756 Detmold",
+                "godziny_pracy": "Mo-Fr 9:00-18:00",
+                "verified": True,
+                "query": "Lidl 32756 Detmold",
+                "not_found": False,
+            },
         }
         enricher = maps.GoogleMapsEnricher(silent_logger, cache=cache)
-        result = enricher.resolve_address("Lidl", "32756 Detmold")
-        assert result == "Hauptstraße 1, 32756 Detmold"
+        result = enricher.verify_place("Lidl", "32756 Detmold")
+        assert result.adres == "Hauptstraße 1, 32756 Detmold"
+        assert result.godziny_pracy == "Mo-Fr 9:00-18:00"
+        assert result.verified is True
 
-    def test_lookup_writes_to_cache(self, silent_logger):
+    def test_verify_place_writes_to_cache(self, silent_logger):
         cache: dict = {}
         enricher = maps.GoogleMapsEnricher(silent_logger, cache=cache)
         enricher._page = MagicMock()
 
-        with patch.object(enricher, "_lookup_address", return_value="Teststraße 2, 80331 München"):
-            result = enricher.resolve_address("McDonald's", "80331 München")
+        fake_result = maps.MapsPlaceResult(
+            adres="Teststraße 2, 80331 München",
+            godziny_pracy="Mo-Sa 10:00-22:00",
+            verified=True,
+        )
+        with patch.object(enricher, "_lookup_place", return_value=fake_result):
+            result = enricher.verify_place("McDonald's", "80331 München")
 
-        assert result == "Teststraße 2, 80331 München"
-        assert cache["maps::McDonald's::80331 München"]["adres"] == "Teststraße 2, 80331 München"
+        assert result.godziny_pracy == "Mo-Sa 10:00-22:00"
+        assert cache["maps::McDonald's::80331 München"]["godziny_pracy"] == "Mo-Sa 10:00-22:00"
 
     def test_is_enrichment_enabled_respects_env(self, monkeypatch):
         monkeypatch.setenv("ENABLE_GOOGLE_MAPS_ENRICHMENT", "false")

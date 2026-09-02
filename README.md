@@ -137,7 +137,9 @@ Obsługiwane formaty: `03.09.2026`, `2. Halbjahr 2026`, `4. Quartal 2028`, `2027
 
 1. **Strona 1** listy — karty z linkiem → pełne dane od razu ze strony szczegółów
 2. **Strona 2+** — tylko PLZ + miasto → wyszukiwanie przez `/suche/Nazwa+PLZ+Miasto` → pobranie pełnego adresu i opisu
-3. **Google Maps (Playwright, headless)** — gdy po walidacji JSON adres nadal niepełny → wyszukiwanie `Nazwa + PLZ + Miasto` na mapach Google
+3. **Google Maps (Playwright, headless)** — **wszystkie** rekordy JSON są weryfikowane i uzupełniane (adres, `godziny_pracy`, `maps_zweryfikowany`)
+
+**Twarda reguła przed Excel:** rekordy z godzinami pracy w JSON (pole `godziny_pracy` z Maps lub wzorzec w tekście) trafiają tylko do **Skipped**, nie do Excela.
 
 Zmienne środowiskowe:
 
@@ -182,6 +184,8 @@ Główne stałe w `neueroeffnung_scraper.py`:
 | `OPENING_FILTER_END` | 2028-12-31 | Koniec filtra dat (Q4 2028) |
 
 **Twarda reguła:** rekordy z datą otwarcia **poza** tym zakresem nie trafiają do JSON/Excel — lądują wyłącznie w arkuszu **Skipped** (również po walidacji, gdy retry zwróci datę spoza zakresu).
+
+**Twarda reguła (godziny pracy):** rekordy z godzinami pracy w JSON nie trafiają do Excela — tylko **Skipped** (`Contains working hours`).
 
 ### Wysyłka e-mail (Gmail)
 

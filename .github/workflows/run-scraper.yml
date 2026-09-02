@@ -1,18 +1,14 @@
-name: Run scraper
+name: Run scraper (full)
 
 on:
   workflow_dispatch:
-  schedule:
-    # Niedziela 04:30 czasu polskiego (CEST, UTC+2) = 02:30 UTC
-    # Po przejściu na CET (UTC+1) uruchomi się o 03:30 UTC — wtedy zmień na: 30 3 * * 0
-    - cron: "30 2 * * 0"
 
 jobs:
   scrape:
     runs-on: ubuntu-latest
-    # Max do następnego cronu = 7 dni (10080 min), ale GitHub-hosted runner cap = 72 h (4320 min)
     timeout-minutes: 4320
     env:
+      PIPELINE_STAGE: full
       GMAIL_USER: ${{ secrets.GMAIL_USER }}
       GMAIL_APP_PASSWORD: ${{ secrets.GMAIL_APP_PASSWORD }}
       SEND_EMAIL: "true"

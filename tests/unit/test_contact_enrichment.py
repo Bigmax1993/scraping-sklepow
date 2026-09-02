@@ -175,7 +175,7 @@ class TestRunBatchContactEnrichment:
 
         with patch.object(ce, "batch_serper_search") as mock_serper:
             with patch.object(ce, "batch_scrape_jobs") as mock_scrape:
-                def fill_scraped(jobs, session, headers, logger):
+                def fill_scraped(jobs, session, headers, logger, **kwargs):
                     jobs[0].scraped = ce.ContactData(
                         email="info@example-shop.de",
                         telefon="+49 89 123",
@@ -219,7 +219,7 @@ class TestRunBatchContactEnrichment:
         }
 
         with patch.object(ce, "batch_scrape_jobs") as mock_scrape:
-            def fill_scraped(jobs, session, headers, logger):
+            def fill_scraped(jobs, session, headers, logger, **kwargs):
                 jobs[0].scraped = ce.ContactData(
                     email="maybe@wrong.de",
                     telefon="+49 89 123",

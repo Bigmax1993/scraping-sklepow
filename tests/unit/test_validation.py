@@ -170,11 +170,11 @@ class TestMapsEnrichmentPipeline:
         with patch("google_maps_enricher.GoogleMapsEnricher", FakeEnricherWithVerify):
             with patch("google_maps_enricher.load_maps_cache", return_value={}):
                 with patch("google_maps_enricher.save_maps_cache"):
-                    result = scraper.run_maps_verification_pipeline(sheets, silent_logger)
+                    sheets, _ = scraper.run_maps_verification_pipeline(sheets, silent_logger)
 
-        assert result["Markets"][0].maps_zweryfikowany is True
-        assert result["Markets"][1].adres == "Hauptstraße 1, 32756 Detmold"
-        assert result["Markets"][1].maps_zweryfikowany is True
+        assert sheets["Markets"][0].maps_zweryfikowany is True
+        assert sheets["Markets"][1].adres == "Hauptstraße 1, 32756 Detmold"
+        assert sheets["Markets"][1].maps_zweryfikowany is True
 
     def test_skips_when_disabled(self, silent_logger, monkeypatch):
         monkeypatch.setenv("ENABLE_GOOGLE_MAPS_ENRICHMENT", "false")

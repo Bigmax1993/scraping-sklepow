@@ -279,6 +279,8 @@ def batch_serper_search(
     jobs: list[ContactEnrichmentJob],
     api_key: str,
     logger: logging.Logger,
+    *,
+    runtime_budget=None,
 ) -> None:
     """Zbiorcza faza Serper — po jednym zapytaniu na rekord bez WWW."""
     pending = [job for job in jobs if not (job.website or "").strip()]
@@ -287,6 +289,8 @@ def batch_serper_search(
         if (job.website or "").strip():
             job.target_url = job.website.strip()
     for job in pending:
+        if runtime_budget is not None and not runtime_budget.check(logger):
+            break
         job.serper_query = f"{job.company_name} {job.address} Impressum Kontakt"
         job.serper_url = serper_search_url(job.serper_query, api_key, logger)
         job.target_url = job.serper_url
@@ -340,11 +344,15 @@ def batch_scrape_jobs(
     session: requests.Session,
     headers: dict,
     logger: logging.Logger,
+    *,
+    runtime_budget=None,
 ) -> None:
     """Zbiorcza faza scrape — requests + bs4 dla wszystkich URL-i z Serper."""
     with_url = [job for job in jobs if job.target_url]
     logger.info("Scrape batch: %s rekordów", len(with_url))
     for job in with_url:
+        if runtime_budget is not None and not runtime_budget.check(logger):
+            break
         scraped, html = scrape_contacts_from_site(session, job.target_url, headers, logger)
         job.scraped = scraped.merge_into(
             ContactData(
@@ -464,6 +472,7 @@ def job_to_batch_entry(job: ContactEnrichmentJob) -> dict:
     return {
         "job_id": job.job_id,
         "category": job.category,
+        "record_index": job.record_index,
         "company_name": job.company_name,
         "address": job.address,
         "missing_fields": job.missing_fields,
@@ -508,6 +517,8 @@ def build_contact_enrichment_jobs(
     data_sheet_names: tuple[str, ...],
     cache: dict,
     logger: logging.Logger,
+    *,
+    record_filter=None,
 ) -> tuple[list[ContactEnrichmentJob], list[tuple[str, int, ContactData]]]:
     """Zwraca joby do przetworzenia oraz trafienia z cache (category, index, contact)."""
     jobs: list[ContactEnrichmentJob] = []
@@ -516,6 +527,8 @@ def build_contact_enrichment_jobs(
 
     for category_name in data_sheet_names:
         for idx, record in enumerate(sheets.get(category_name, [])):
+            if record_filter is not None and not record_filter(category_name, idx):
+                continue
             missing = missing_contact_fields(
                 record.telefon,
                 record.email,
@@ -564,15 +577,22 @@ def run_batch_contact_enrichment(
     data_sheet_names: tuple[str, ...],
     headers: dict,
     logger: logging.Logger,
+    *,
+    record_filter=None,
+    batch_limit: int | None = None,
+    runtime_budget=None,
 ) -> tuple[dict[str, list[Any]], dict]:
     """Batch: Serper → scrape (Claude w claude_record_normalizer)."""
     contact_cache = load_contact_cache(logger)
     jobs, cached_hits = build_contact_enrichment_jobs(
-        sheets, data_sheet_names, contact_cache, logger
+        sheets, data_sheet_names, contact_cache, logger, record_filter=record_filter
     )
 
     for category_name, idx, contact in cached_hits:
         apply_contact_to_record(sheets[category_name][idx], contact)
+
+    if batch_limit is not None:
+        jobs = jobs[:batch_limit]
 
     report: dict[str, Any] = {
         "generated_at": datetime.now().isoformat(timespec="seconds"),
@@ -589,17 +609,27 @@ def run_batch_contact_enrichment(
 
     api_key = get_serper_api_key()
     if api_key:
-        batch_serper_search(jobs, api_key, logger)
+        batch_serper_search(jobs, api_key, logger, runtime_budget=runtime_budget)
     else:
         logger.warning("Brak SERPER_API_KEY — używam tylko istniejących URL-i WWW")
         for job in jobs:
             if (job.website or "").strip():
                 job.target_url = job.website.strip()
 
-    batch_scrape_jobs(jobs, session, headers, logger)
+    batch_scrape_jobs(jobs, session, headers, logger, runtime_budget=runtime_budget)
 
+    time_limit_hit = bool(runtime_budget is not None and runtime_budget.time_limit_hit)
     for job in jobs:
-        report["jobs"].append(job_to_batch_entry(job))
+        if job.scraped.has_any() or job.html_snippet or job.target_url:
+            report["jobs"].append(job_to_batch_entry(job))
+
+    report["time_limit_hit"] = time_limit_hit
+    if time_limit_hit:
+        logger.warning(
+            "Contact: limit czasu — zapisano %s/%s ukończonych jobów scrape.",
+            len(report["jobs"]),
+            len(jobs),
+        )
 
     save_contact_cache(contact_cache, logger)
     save_contact_batch_report(report, logger)

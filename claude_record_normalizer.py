@@ -56,6 +56,7 @@ class RecordNormalizationJob:
     data_zamkniecia: str = ""
     contacts_verified: bool = False
     verified_contact: ContactData = field(default_factory=ContactData)
+    claude_processed: bool = False
 
 
 def is_record_normalization_enabled() -> bool:
@@ -124,16 +125,20 @@ def build_record_normalization_jobs(
 def batch_normalize_records_with_claude(
     jobs: list[RecordNormalizationJob],
     logger: logging.Logger,
-) -> None:
+    *,
+    runtime_budget=None,
+) -> bool:
+    """Zwraca True gdy przerwano z powodu limitu czasu."""
     if not jobs:
-        return
+        return False
     if not is_record_normalization_enabled():
         for job in jobs:
             job.accept = True
             job.informacja = job.information_raw
             job.data_otwarcia = job.opening_date
             job.data_zamkniecia = job.closing_date
-        return
+            job.claude_processed = True
+        return False
 
     try:
         import anthropic
@@ -142,13 +147,16 @@ def batch_normalize_records_with_claude(
         for job in jobs:
             job.accept = True
             job.informacja = job.information_raw
-        return
+            job.claude_processed = True
+        return False
 
     client = anthropic.Anthropic()
     model = os.environ.get("CLAUDE_CONTACT_MODEL", "claude-sonnet-4-6")
     chunk_size = int(os.environ.get("CONTACT_CLAUDE_BATCH_SIZE", str(CLAUDE_BATCH_CHUNK_SIZE)))
 
     for chunk_start in range(0, len(jobs), chunk_size):
+        if runtime_budget is not None and not runtime_budget.check(logger):
+            return True
         chunk = jobs[chunk_start : chunk_start + chunk_size]
         payload = []
         for job in chunk:
@@ -222,6 +230,8 @@ Rekordy:
                     len(job.informacja),
                     "verified" if job.contacts_verified else "brak",
                 )
+            for job in chunk:
+                job.claude_processed = True
         except Exception as exc:
             logger.warning("Claude normalizacja błąd (chunk %s): %s", chunk_start, exc)
             for job in chunk:
@@ -229,6 +239,9 @@ Rekordy:
                 job.informacja = job.information_raw
                 job.data_otwarcia = job.opening_date
                 job.data_zamkniecia = job.closing_date
+                job.claude_processed = True
+
+    return False
 
 
 def apply_normalization_job_to_record(record: Any, job: RecordNormalizationJob) -> None:
@@ -271,6 +284,8 @@ def run_claude_record_normalization(
     skipped_record_cls: type,
     logger: logging.Logger,
     contact_report: dict | None = None,
+    *,
+    runtime_budget=None,
 ) -> tuple[dict[str, list[Any]], dict]:
     jobs = build_record_normalization_jobs(sheets, data_sheet_names, contact_report)
     report: dict[str, Any] = {
@@ -279,6 +294,8 @@ def run_claude_record_normalization(
         "jobs_total": len(jobs),
         "accepted": 0,
         "rejected": 0,
+        "skipped_unprocessed": 0,
+        "time_limit_hit": False,
         "jobs": [],
     }
 
@@ -286,11 +303,18 @@ def run_claude_record_normalization(
         save_claude_record_report(report, logger)
         return sheets, report
 
-    batch_normalize_records_with_claude(jobs, logger)
+    time_limit_hit = batch_normalize_records_with_claude(jobs, logger, runtime_budget=runtime_budget)
+    report["time_limit_hit"] = time_limit_hit or bool(
+        runtime_budget is not None and runtime_budget.time_limit_hit
+    )
 
     rejected = 0
     accepted = 0
+    skipped_unprocessed = 0
     for job in jobs:
+        if not job.claude_processed:
+            skipped_unprocessed += 1
+            continue
         record = sheets[job.category][job.record_index]
         if not job.accept:
             rejected += 1
@@ -326,18 +350,30 @@ def run_claude_record_normalization(
         report["jobs"].append(job_to_report_entry(job))
 
     for category_name in data_sheet_names:
-        sheets[category_name] = [
-            sheets[category_name][job.record_index]
+        reject_indices = {
+            job.record_index
             for job in jobs
-            if job.category == category_name and job.accept
+            if job.category == category_name and job.claude_processed and not job.accept
+        }
+        sheets[category_name] = [
+            record
+            for idx, record in enumerate(sheets[category_name])
+            if idx not in reject_indices
         ]
 
     report["accepted"] = accepted
     report["rejected"] = rejected
+    report["skipped_unprocessed"] = skipped_unprocessed
     save_claude_record_report(report, logger)
+    if report["time_limit_hit"]:
+        logger.warning(
+            "Claude: limit czasu — %s rekordów czeka na następny finalize.",
+            skipped_unprocessed,
+        )
     logger.info(
-        "Claude rekordy: %s zaakceptowanych, %s odrzuconych",
+        "Claude rekordy: %s zaakceptowanych, %s odrzuconych, %s oczekujących",
         accepted,
         rejected,
+        skipped_unprocessed,
     )
     return sheets, report

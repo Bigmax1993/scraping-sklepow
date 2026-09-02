@@ -1,0 +1,57 @@
+name: Pipeline — Finalize
+
+on:
+  workflow_dispatch:
+  schedule:
+    # Niedziela 12:00 czasu polskiego (CEST) = 10:00 UTC
+    - cron: "0 10 * * 0"
+
+jobs:
+  finalize:
+    runs-on: ubuntu-latest
+    timeout-minutes: 240
+    env:
+      PIPELINE_STAGE: finalize
+      MAX_RUNTIME_SECONDS: "14400"
+      ENABLE_CLAUDE_RECORD_NORMALIZE: "true"
+      ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
+      GMAIL_USER: ${{ secrets.GMAIL_USER }}
+      GMAIL_APP_PASSWORD: ${{ secrets.GMAIL_APP_PASSWORD }}
+      SEND_EMAIL: "true"
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/cache@v4
+        with:
+          path: |
+            neueroeffnung_staging.json
+            neueroeffnung_contact_batch.json
+            neueroeffnung_claude_records.json
+            neueroeffnung_processed.json
+          key: pipeline-${{ github.ref_name }}-${{ hashFiles('neueroeffnung_staging.json', 'neueroeffnung_processed.json') }}
+          restore-keys: |
+            pipeline-${{ github.ref_name }}-
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.13"
+
+      - name: Install dependencies
+        run: pip install -r requirements.txt
+
+      - name: Run finalize
+        run: python neueroeffnung_scraper.py
+
+      - name: Upload Excel artifact
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: neueroeffnung-wynik
+          path: |
+            neueroeffnung_wynik.xlsx
+            neueroeffnung_wynik.json
+            neueroeffnung_raport_brakow.json
+            neueroeffnung_staging.json
+            neueroeffnung_claude_records.json
+            neueroeffnung_scraper.log
+          if-no-files-found: ignore

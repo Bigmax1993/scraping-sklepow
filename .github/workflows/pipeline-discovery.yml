@@ -1,0 +1,48 @@
+name: Pipeline — Discovery
+
+on:
+  workflow_dispatch:
+  schedule:
+    # Pon–Pt 03:30 czasu polskiego (CEST, UTC+2) = 01:30 UTC
+    - cron: "30 1 * * 1-5"
+
+jobs:
+  discovery:
+    runs-on: ubuntu-latest
+    timeout-minutes: 240
+    env:
+      PIPELINE_STAGE: discovery
+      MAX_RUNTIME_SECONDS: "14400"
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/cache@v4
+        with:
+          path: |
+            neueroeffnung_staging.json
+            neueroeffnung_detail_cache.json
+            neueroeffnung_processed.json
+          key: pipeline-${{ github.ref_name }}-${{ hashFiles('neueroeffnung_staging.json', 'neueroeffnung_processed.json') }}
+          restore-keys: |
+            pipeline-${{ github.ref_name }}-
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.13"
+
+      - name: Install dependencies
+        run: pip install -r requirements.txt
+
+      - name: Run discovery
+        run: python neueroeffnung_scraper.py
+
+      - name: Upload staging artifact
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: pipeline-staging-discovery
+          path: |
+            neueroeffnung_staging.json
+            neueroeffnung_detail_cache.json
+            neueroeffnung_scraper.log
+          if-no-files-found: ignore

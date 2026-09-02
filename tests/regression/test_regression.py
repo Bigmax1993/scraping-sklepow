@@ -107,6 +107,7 @@ class TestRegressionRecordShape:
             "kontakt_zweryfikowany",
             "kontakt_zrodlo",
             "claude_zweryfikowany",
+            "pipeline_stage",
         )
 
     def test_excel_column_order_unchanged(self, silent_logger, tmp_path):

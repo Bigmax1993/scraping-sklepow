@@ -35,9 +35,11 @@ class TestClaudeRecordNormalizer:
         }
         skipped: list[scraper.SkippedRecord] = []
 
-        def fake_batch(jobs, logger):
+        def fake_batch(jobs, logger, **kwargs):
             jobs[0].accept = False
             jobs[0].reject_reason = "Nie handel"
+            jobs[0].claude_processed = True
+            return False
 
         with patch.object(crn, "batch_normalize_records_with_claude", side_effect=fake_batch):
             result, report = crn.run_claude_record_normalization(
@@ -74,7 +76,7 @@ class TestClaudeRecordNormalizer:
         }
         skipped: list[scraper.SkippedRecord] = []
 
-        def fake_batch(jobs, logger):
+        def fake_batch(jobs, logger, **kwargs):
             jobs[0].accept = True
             jobs[0].informacja = "Der Markt REWE in Berlin eröffnet am 3. September 2026 nach Umbau."
             jobs[0].data_otwarcia = "03.09.2026"
@@ -83,6 +85,8 @@ class TestClaudeRecordNormalizer:
                 email="info@rewe.de",
                 verified=True,
             )
+            jobs[0].claude_processed = True
+            return False
 
         with patch.object(crn, "batch_normalize_records_with_claude", side_effect=fake_batch):
             with patch("contact_enrichment.save_contact_cache"):

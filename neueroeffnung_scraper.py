@@ -14,6 +14,7 @@ import calendar
 import html
 import json
 import logging
+import os
 import re
 import time
 import unicodedata
@@ -37,6 +38,7 @@ OUTPUT_FILE = SCRIPT_DIR / "neueroeffnung_wynik.xlsx"
 JSON_OUTPUT_FILE = SCRIPT_DIR / "neueroeffnung_wynik.json"
 VALIDATION_REPORT_FILE = SCRIPT_DIR / "neueroeffnung_raport_brakow.json"
 PROCESSED_RECORDS_FILE = SCRIPT_DIR / "neueroeffnung_processed.json"
+STAGING_FILE = SCRIPT_DIR / "neueroeffnung_staging.json"
 CACHE_FILE = SCRIPT_DIR / "neueroeffnung_detail_cache.json"
 LOG_FILE = SCRIPT_DIR / "neueroeffnung_scraper.log"
 
@@ -274,6 +276,7 @@ class Record:
     kontakt_zweryfikowany: bool = False
     kontakt_zrodlo: str = ""
     claude_zweryfikowany: bool = False
+    pipeline_stage: str = "discovery"
 
 
 @dataclass
@@ -514,6 +517,7 @@ def clean_record(record: Record, logger: logging.Logger) -> Record:
         kontakt_zweryfikowany=record.kontakt_zweryfikowany,
         kontakt_zrodlo=clean_text_local(record.kontakt_zrodlo),
         claude_zweryfikowany=record.claude_zweryfikowany,
+        pipeline_stage=record.pipeline_stage,
     )
 
 
@@ -1142,12 +1146,18 @@ def collect_category_records(
     category_name: str = "",
     skipped: list[SkippedRecord] | None = None,
     processed: set[str] | None = None,
+    runtime_budget=None,
 ) -> list[Record]:
     records: list[Record] = []
     seen: set[tuple[str, str, str]] = set()
 
     for batch in iter_category_pages(session, base_url, logger):
+        if runtime_budget is not None and not runtime_budget.check(logger):
+            logger.info("Discovery: limit czasu — kończę kategorię %s z %s rekordami.", category_name, len(records))
+            break
         for item in batch:
+            if runtime_budget is not None and not runtime_budget.check(logger):
+                break
             key = (item.nazwa.lower(), item.adres_lista.lower(), item.data_otwarcia)
             if key in seen:
                 continue
@@ -1327,6 +1337,8 @@ def run_validation_pipeline(
     sheets: dict[str, list[Record]],
     cache: dict,
     logger: logging.Logger,
+    *,
+    runtime_budget=None,
 ) -> tuple[dict[str, list[Record]], dict[str, int]]:
     """
     Walidacja JSON → ponowienie pobrania → oznaczenie rekordów z brakami.
@@ -1358,6 +1370,9 @@ def run_validation_pipeline(
             len(to_retry),
         )
         for category_name, idx in to_retry:
+            if runtime_budget is not None and not runtime_budget.check(logger):
+                logger.info("Validate: limit czasu — kończę ponowienia po %s próbie.", attempt)
+                return sheets, validate_all_records(sheets)
             record = sheets[category_name][idx]
             sheets[category_name][idx] = retry_record(session, record, cache, logger)
 
@@ -1381,8 +1396,12 @@ def run_validation_pipeline(
 def run_maps_verification_pipeline(
     sheets: dict[str, list[Record]],
     logger: logging.Logger,
-) -> dict[str, list[Record]]:
-    """Weryfikuje i uzupełnia wszystkie rekordy JSON przez Google Maps (Playwright, headless)."""
+    *,
+    targets: list[tuple[str, int]] | None = None,
+    runtime_budget=None,
+    advance_stage: str | None = None,
+) -> tuple[dict[str, list[Record]], dict]:
+    """Weryfikuje rekordy przez Google Maps (Playwright). Opcjonalnie partia + limit czasu."""
     from google_maps_enricher import (
         GoogleMapsEnricher,
         is_enrichment_enabled,
@@ -1390,44 +1409,78 @@ def run_maps_verification_pipeline(
         save_maps_cache,
     )
 
+    stats = {"processed": 0, "verified": 0, "time_limit_hit": False, "pending": 0}
+
     if not is_enrichment_enabled():
         logger.info("Google Maps verification wyłączone (ENABLE_GOOGLE_MAPS_ENRICHMENT=false)")
-        return sheets
+        return sheets, stats
 
-    total = sum(len(sheets.get(name, [])) for name in DATA_SHEET_NAMES)
-    if total == 0:
+    if targets is None:
+        targets = [
+            (category_name, idx)
+            for category_name in DATA_SHEET_NAMES
+            for idx in range(len(sheets.get(category_name, [])))
+        ]
+
+    stats["pending"] = len(targets)
+    if not targets:
         logger.info("Google Maps: brak rekordów do weryfikacji.")
-        return sheets
+        return sheets, stats
 
-    logger.info("--- Google Maps: weryfikacja %s rekordów ---", total)
+    logger.info("--- Google Maps: weryfikacja %s rekordów (partia) ---", len(targets))
     maps_cache = load_maps_cache(logger)
 
     try:
         with GoogleMapsEnricher(logger, maps_cache) as enricher:
-            for category_name in DATA_SHEET_NAMES:
-                for idx, record in enumerate(sheets.get(category_name, [])):
-                    partial = record.listing_adres_lista or record.adres
+            for category_name, idx in targets:
+                if runtime_budget is not None and not runtime_budget.check(logger):
+                    stats["time_limit_hit"] = True
+                    break
+
+                record = sheets[category_name][idx]
+                partial = record.listing_adres_lista or record.adres
+                try:
                     result = enricher.verify_place(record.nazwa_firmy, partial)
-                    record.maps_zweryfikowany = result.verified
-                    if result.adres:
-                        context = f"{record.nazwa_firmy} | {partial}"
-                        record.adres = validate_address(result.adres, logger, context)
-                    if result.godziny_pracy:
-                        record.godziny_pracy = clean_text_local(result.godziny_pracy)
-                    sheets[category_name][idx] = apply_validation_status(record)
-                    if result.verified:
-                        logger.info(
-                            "  ✓ Maps: %s | adres=%s | godziny=%s",
-                            record.nazwa_firmy,
-                            "tak" if result.adres else "brak",
-                            "tak" if result.godziny_pracy else "brak",
-                        )
+                except Exception as exc:
+                    logger.warning(
+                        "  Maps pominięto (błąd rekordu, kontynuuję): %s | %s",
+                        record.nazwa_firmy,
+                        exc,
+                    )
+                    continue
+                record.maps_zweryfikowany = result.verified
+                if result.adres:
+                    context = f"{record.nazwa_firmy} | {partial}"
+                    record.adres = validate_address(result.adres, logger, context)
+                if result.godziny_pracy:
+                    record.godziny_pracy = clean_text_local(result.godziny_pracy)
+                if advance_stage:
+                    record.pipeline_stage = advance_stage
+                sheets[category_name][idx] = apply_validation_status(record)
+                stats["processed"] += 1
+                if result.verified:
+                    stats["verified"] += 1
+                    logger.info(
+                        "  ✓ Maps: %s | adres=%s | godziny=%s",
+                        record.nazwa_firmy,
+                        "tak" if result.adres else "brak",
+                        "tak" if result.godziny_pracy else "brak",
+                    )
     except Exception as exc:
         logger.error("Google Maps verification przerwane: %s", exc)
     finally:
         save_maps_cache(maps_cache, logger)
 
-    return sheets
+    stats["time_limit_hit"] = stats["time_limit_hit"] or bool(
+        runtime_budget is not None and runtime_budget.time_limit_hit
+    )
+    logger.info(
+        "Google Maps partia: przetworzono=%s, zweryfikowano=%s, limit_czasu=%s",
+        stats["processed"],
+        stats["verified"],
+        stats["time_limit_hit"],
+    )
+    return sheets, stats
 
 
 def run_maps_enrichment_pipeline(
@@ -1435,7 +1488,8 @@ def run_maps_enrichment_pipeline(
     logger: logging.Logger,
 ) -> dict[str, list[Record]]:
     """Alias wsteczny — weryfikuje wszystkie rekordy przez Google Maps."""
-    return run_maps_verification_pipeline(sheets, logger)
+    sheets, _ = run_maps_verification_pipeline(sheets, logger)
+    return sheets
 
 
 def apply_contact_data_to_record(record: Record, contact) -> None:
@@ -1448,6 +1502,10 @@ def run_contact_enrichment_pipeline(
     session: requests.Session,
     sheets: dict[str, list[Record]],
     logger: logging.Logger,
+    *,
+    record_filter=None,
+    batch_limit: int | None = None,
+    runtime_budget=None,
 ) -> tuple[dict[str, list[Record]], dict]:
     """Serper batch + scrape (bez Claude — weryfikacja w claude_record_normalizer)."""
     from contact_enrichment import (
@@ -1478,7 +1536,14 @@ def run_contact_enrichment_pipeline(
 
     try:
         sheets, report = run_batch_contact_enrichment(
-            session, sheets, DATA_SHEET_NAMES, HEADERS, logger
+            session,
+            sheets,
+            DATA_SHEET_NAMES,
+            HEADERS,
+            logger,
+            record_filter=record_filter,
+            batch_limit=batch_limit,
+            runtime_budget=runtime_budget,
         )
         logger.info(
             "Kontakty scrape zakończone: jobów=%s, cached=%s",
@@ -1496,13 +1561,16 @@ def run_claude_record_normalization_pipeline(
     skipped: list[SkippedRecord],
     logger: logging.Logger,
     contact_report: dict | None = None,
-) -> dict[str, list[Record]]:
+    *,
+    runtime_budget=None,
+) -> tuple[dict[str, list[Record]], dict]:
     """Claude: filtr jakości + spójny opis + weryfikacja kontaktów."""
     from claude_record_normalizer import is_record_normalization_enabled, run_claude_record_normalization
 
+    empty_report: dict = {"accepted": 0, "rejected": 0, "time_limit_hit": False}
     if not is_record_normalization_enabled():
         logger.info("Claude record normalize wyłączone")
-        return sheets
+        return sheets, empty_report
 
     logger.info("--- Claude: filtr rekordów i spójny wpis JSON ---")
     sheets, report = run_claude_record_normalization(
@@ -1513,13 +1581,14 @@ def run_claude_record_normalization_pipeline(
         SkippedRecord,
         logger,
         contact_report=contact_report,
+        runtime_budget=runtime_budget,
     )
     logger.info(
         "Claude rekordy: zaakceptowano=%s, odrzucono=%s",
         report.get("accepted", 0),
         report.get("rejected", 0),
     )
-    return sheets
+    return sheets, report
 
 
 def build_validation_report_rows(sheets: dict[str, list[Record]]) -> list[list]:
@@ -1732,9 +1801,452 @@ def write_excel(
 
 
 def run_scraper() -> None:
-    logger = setup_logging()
-    logger.info("=== START scrapera neueroeffnung.info ===")
+    """Uruchamia pipeline — segment (PIPELINE_STAGE) lub pełny run (full, domyślnie)."""
+    from pipeline_state import StageResult
 
+    logger = setup_logging()
+    stage = os.environ.get("PIPELINE_STAGE", "full").strip().lower()
+    dispatch = {
+        "discovery": run_discovery_stage,
+        "validate": run_validate_stage,
+        "maps": run_maps_stage,
+        "contact": run_contact_stage,
+        "finalize": run_finalize_stage,
+        "full": run_scraper_full,
+    }
+    handler = dispatch.get(stage)
+    if handler is None:
+        logger.error("Nieznany PIPELINE_STAGE=%s (dozwolone: %s)", stage, ", ".join(dispatch))
+        raise SystemExit(1)
+    logger.info("=== START pipeline stage=%s ===", stage)
+    try:
+        result = handler(logger)
+    except Exception as exc:
+        logger.exception("Segment '%s' — nieoczekiwany błąd: %s", stage, exc)
+        raise SystemExit(1) from exc
+
+    if not isinstance(result, StageResult):
+        result = StageResult()
+    if result.time_limit_hit:
+        logger.info(
+            "Segment '%s' zatrzymany po limicie czasu — postęp zapisany, wznowienie przy następnym cronie.",
+            stage,
+        )
+    elif result.error:
+        logger.error("Segment '%s' zakończony błędem: %s", stage, result.error)
+        raise SystemExit(1)
+    logger.info("=== KONIEC pipeline stage=%s ===", stage)
+
+
+def run_discovery_stage(logger: logging.Logger):
+    from pipeline_state import STAGE_DISCOVERY, RuntimeBudget, StageResult, load_staging, merge_discovery_sheets, save_staging
+
+    budget = RuntimeBudget()
+    processed_records = load_processed_records(logger)
+    cache = load_cache(logger)
+    session = requests.Session()
+    skipped: list[SkippedRecord] = []
+    discovered: dict[str, list[Record]] = {}
+    staging = load_staging(
+        STAGING_FILE, logger, data_sheet_names=DATA_SHEET_NAMES, record_from_dict=record_from_dict
+    )
+
+    logger.info(
+        "Filtr dat otwarcia: Q3 2026 (%s) – Q4 2028 (%s)",
+        OPENING_FILTER_START.isoformat(),
+        OPENING_FILTER_END.isoformat(),
+    )
+
+    try:
+        for sheet_name, url in CATEGORIES.items():
+            if not budget.check(logger):
+                break
+            logger.info("--- Kategoria: %s ---", sheet_name)
+            discovered[sheet_name] = collect_category_records(
+                session,
+                url,
+                cache,
+                logger,
+                category_name=sheet_name,
+                skipped=skipped,
+                processed=processed_records,
+                runtime_budget=budget,
+            )
+
+        if discovered:
+            logger.info("--- Czyszczenie danych (lokalne) ---")
+            data_only = {name: discovered[name] for name in DATA_SHEET_NAMES if name in discovered}
+            discovered.update(clean_all_sheets(data_only, logger))
+            discovered = purge_out_of_range_records(discovered, skipped, logger)
+            staging = merge_discovery_sheets(
+                staging,
+                discovered,
+                DATA_SHEET_NAMES,
+                record_fingerprint,
+                processed_records,
+                logger,
+            )
+    finally:
+        save_staging(
+            staging,
+            STAGING_FILE,
+            logger,
+            stage=STAGE_DISCOVERY,
+            data_sheet_names=DATA_SHEET_NAMES,
+            record_to_dict=record_to_dict,
+            extra={"time_limit_hit": budget.time_limit_hit},
+        )
+
+    logger.info("Discovery: pominięto %s wpisów (skipped log)", len(skipped))
+    return StageResult(time_limit_hit=budget.time_limit_hit)
+
+
+def run_validate_stage(logger: logging.Logger):
+    from pipeline_state import (
+        STAGE_DISCOVERY,
+        STAGE_VALIDATED,
+        RuntimeBudget,
+        StageResult,
+        count_records_at_stage,
+        iter_records_at_stage,
+        load_staging,
+        save_staging,
+    )
+
+    budget = RuntimeBudget()
+    cache = load_cache(logger)
+    session = requests.Session()
+    skipped: list[SkippedRecord] = []
+
+    sheets = load_staging(
+        STAGING_FILE, logger, data_sheet_names=DATA_SHEET_NAMES, record_from_dict=record_from_dict
+    )
+    pending = count_records_at_stage(sheets, DATA_SHEET_NAMES, STAGE_DISCOVERY)
+    if pending == 0:
+        logger.info("Validate: brak rekordów discovery — koniec.")
+        return StageResult()
+
+    logger.info("Validate: %s rekordów discovery", pending)
+    discovery_keys = {
+        (cat, idx) for cat, idx, _ in iter_records_at_stage(sheets, DATA_SHEET_NAMES, STAGE_DISCOVERY)
+    }
+
+    try:
+        subset: dict[str, list[Record]] = {
+            name: [sheets[name][idx] for idx in range(len(sheets.get(name, []))) if (name, idx) in discovery_keys]
+            for name in DATA_SHEET_NAMES
+        }
+        subset, _ = run_validation_pipeline(session, subset, cache, logger, runtime_budget=budget)
+        subset = purge_out_of_range_records(subset, skipped, logger)
+        sheets = _merge_validated_discovery(sheets, subset, discovery_keys)
+    finally:
+        save_staging(
+            sheets,
+            STAGING_FILE,
+            logger,
+            stage=STAGE_VALIDATED,
+            data_sheet_names=DATA_SHEET_NAMES,
+            record_to_dict=record_to_dict,
+            extra={"time_limit_hit": budget.time_limit_hit},
+        )
+
+    return StageResult(time_limit_hit=budget.time_limit_hit)
+
+
+def _merge_validated_discovery(
+    sheets: dict[str, list[Record]],
+    validated_subset: dict[str, list[Record]],
+    discovery_keys: set[tuple[str, int]],
+) -> dict[str, list[Record]]:
+    from pipeline_state import STAGE_VALIDATED
+
+    validated_fps = {
+        record_fingerprint(record): record for records in validated_subset.values() for record in records
+    }
+    merged: dict[str, list[Record]] = {}
+    for category_name in DATA_SHEET_NAMES:
+        new_list: list[Record] = []
+        for idx, record in enumerate(sheets.get(category_name, [])):
+            if (category_name, idx) not in discovery_keys:
+                new_list.append(record)
+                continue
+            updated = validated_fps.get(record_fingerprint(record))
+            if updated is None:
+                continue
+            updated.pipeline_stage = STAGE_VALIDATED
+            new_list.append(updated)
+        merged[category_name] = new_list
+    return merged
+
+
+def run_maps_stage(logger: logging.Logger):
+    from pipeline_state import (
+        STAGE_PO_MAPS,
+        STAGE_VALIDATED,
+        RuntimeBudget,
+        StageResult,
+        iter_records_at_stage,
+        load_staging,
+        maps_batch_limit,
+        save_staging,
+    )
+
+    budget = RuntimeBudget()
+    sheets = load_staging(
+        STAGING_FILE, logger, data_sheet_names=DATA_SHEET_NAMES, record_from_dict=record_from_dict
+    )
+    pending = iter_records_at_stage(sheets, DATA_SHEET_NAMES, STAGE_VALIDATED)
+    if not pending:
+        logger.info("Maps: brak rekordów validated — koniec.")
+        return StageResult()
+
+    limit = maps_batch_limit()
+    targets = [(cat, idx) for cat, idx, _ in pending[:limit]]
+    logger.info("Maps: %s oczekujących, partia=%s", len(pending), len(targets))
+
+    stats: dict = {}
+    try:
+        sheets, stats = run_maps_verification_pipeline(
+            sheets,
+            logger,
+            targets=targets,
+            runtime_budget=budget,
+            advance_stage=STAGE_PO_MAPS,
+        )
+    finally:
+        time_limit_hit = stats.get("time_limit_hit") or budget.time_limit_hit
+        save_staging(
+            sheets,
+            STAGING_FILE,
+            logger,
+            stage=STAGE_PO_MAPS,
+            data_sheet_names=DATA_SHEET_NAMES,
+            record_to_dict=record_to_dict,
+            extra={"maps_stats": stats, "time_limit_hit": time_limit_hit},
+        )
+
+    return StageResult(time_limit_hit=stats.get("time_limit_hit") or budget.time_limit_hit)
+
+
+def run_contact_stage(logger: logging.Logger):
+    from contact_enrichment import record_needs_contact_enrichment
+    from pipeline_state import (
+        STAGE_PO_MAPS,
+        STAGE_PO_SCRAPE_KONTAKT,
+        RuntimeBudget,
+        StageResult,
+        contact_batch_limit,
+        iter_records_at_stage,
+        load_staging,
+        save_staging,
+    )
+
+    budget = RuntimeBudget()
+    sheets = load_staging(
+        STAGING_FILE, logger, data_sheet_names=DATA_SHEET_NAMES, record_from_dict=record_from_dict
+    )
+    po_maps = iter_records_at_stage(sheets, DATA_SHEET_NAMES, STAGE_PO_MAPS)
+    if not po_maps:
+        logger.info("Contact: brak rekordów po_maps — koniec.")
+        return StageResult()
+
+    advanced = 0
+    needs_work: list[tuple[str, int]] = []
+    for category_name, idx, record in po_maps:
+        if not record_needs_contact_enrichment(
+            record.telefon, record.email, record.website, record.osoba_kontaktowa
+        ):
+            record.pipeline_stage = STAGE_PO_SCRAPE_KONTAKT
+            sheets[category_name][idx] = record
+            advanced += 1
+        else:
+            needs_work.append((category_name, idx))
+
+    logger.info("Contact: %s bez potrzeby scrape, %s do uzupełnienia", advanced, len(needs_work))
+    contact_report: dict = {"jobs": [], "time_limit_hit": False}
+
+    try:
+        if needs_work:
+            allowed = set(needs_work[: contact_batch_limit()])
+            session = requests.Session()
+
+            def record_filter(category_name: str, idx: int) -> bool:
+                return (category_name, idx) in allowed
+
+            sheets, contact_report = run_contact_enrichment_pipeline(
+                session,
+                sheets,
+                logger,
+                record_filter=record_filter,
+                batch_limit=contact_batch_limit(),
+                runtime_budget=budget,
+            )
+
+            completed = {
+                (job["category"], job["record_index"])
+                for job in contact_report.get("jobs", [])
+                if "record_index" in job
+            }
+            for category_name, idx in allowed:
+                if (category_name, idx) not in completed:
+                    continue
+                record = sheets[category_name][idx]
+                if record.pipeline_stage == STAGE_PO_MAPS:
+                    record.pipeline_stage = STAGE_PO_SCRAPE_KONTAKT
+                    sheets[category_name][idx] = record
+    finally:
+        time_limit_hit = contact_report.get("time_limit_hit") or budget.time_limit_hit
+        save_staging(
+            sheets,
+            STAGING_FILE,
+            logger,
+            stage=STAGE_PO_SCRAPE_KONTAKT,
+            data_sheet_names=DATA_SHEET_NAMES,
+            record_to_dict=record_to_dict,
+            extra={"contact_jobs": contact_report.get("jobs_total", 0), "time_limit_hit": time_limit_hit},
+        )
+
+    return StageResult(time_limit_hit=contact_report.get("time_limit_hit") or budget.time_limit_hit)
+
+
+def run_finalize_stage(logger: logging.Logger):
+    from pipeline_state import (
+        STAGE_PO_KONTAKT,
+        STAGE_PO_SCRAPE_KONTAKT,
+        RuntimeBudget,
+        StageResult,
+        load_staging,
+        remove_exported_from_staging,
+        save_staging,
+    )
+
+    budget = RuntimeBudget()
+    processed_records = load_processed_records(logger)
+    import_processed_from_json(JSON_OUTPUT_FILE, processed_records, logger)
+    prepare_fresh_output_files(logger)
+
+    sheets = load_staging(
+        STAGING_FILE, logger, data_sheet_names=DATA_SHEET_NAMES, record_from_dict=record_from_dict
+    )
+    skipped: list[SkippedRecord] = []
+
+    finalize_sheets: dict[str, list[Record]] = {
+        name: [r for r in sheets.get(name, []) if r.pipeline_stage == STAGE_PO_SCRAPE_KONTAKT]
+        for name in DATA_SHEET_NAMES
+    }
+    total_finalize = sum(len(v) for v in finalize_sheets.values())
+    if total_finalize == 0:
+        logger.info("Finalize: brak rekordów po_scrape_kontakt — koniec.")
+        return StageResult()
+
+    logger.info("Finalize: %s rekordów do Claude + Excel", total_finalize)
+    claude_report: dict = {"time_limit_hit": False}
+
+    try:
+        validation_summary = validate_all_records(finalize_sheets)
+
+        contact_report_path = SCRIPT_DIR / "neueroeffnung_contact_batch.json"
+        contact_report = None
+        if contact_report_path.exists():
+            try:
+                with open(contact_report_path, "r", encoding="utf-8") as f:
+                    contact_report = json.load(f)
+            except Exception:
+                contact_report = None
+
+        finalize_sheets, claude_report = run_claude_record_normalization_pipeline(
+            finalize_sheets, skipped, logger, contact_report, runtime_budget=budget
+        )
+        time_limit_hit = claude_report.get("time_limit_hit") or budget.time_limit_hit
+
+        if time_limit_hit:
+            logger.warning(
+                "Finalize: limit czasu po Claude — pomijam Excel/mail (%s rekordów czeka).",
+                claude_report.get("skipped_unprocessed", 0),
+            )
+            _merge_finalize_back_to_staging(sheets, finalize_sheets)
+            return StageResult(time_limit_hit=True)
+
+        validation_summary = validate_all_records(finalize_sheets)
+
+        for name in DATA_SHEET_NAMES:
+            for record in finalize_sheets.get(name, []):
+                record.pipeline_stage = STAGE_PO_KONTAKT
+
+        finalize_sheets = purge_records_with_working_hours(finalize_sheets, skipped, logger)
+        validation_summary = validate_all_records(finalize_sheets)
+        enrich_all_closing_dates(finalize_sheets)
+
+        save_json_dataset(
+            finalize_sheets,
+            JSON_OUTPUT_FILE,
+            logger,
+            stage="po_walidacji",
+            validation_summary=validation_summary,
+        )
+        save_validation_report_json(finalize_sheets, validation_summary, VALIDATION_REPORT_FILE, logger)
+        skipped.extend(collect_verification_skipped(finalize_sheets))
+        write_excel(finalize_sheets, skipped, OUTPUT_FILE, logger)
+
+        exported_fps: set[str] = set()
+        mark_records_as_processed(finalize_sheets, processed_records)
+        for name in DATA_SHEET_NAMES:
+            for record in finalize_sheets.get(name, []):
+                exported_fps.add(record_fingerprint(record))
+        save_processed_records(processed_records, logger)
+
+        sheets = remove_exported_from_staging(sheets, DATA_SHEET_NAMES, exported_fps, record_fingerprint)
+
+        logger.info("--- Wysyłka e-mail z wynikiem ---")
+        try:
+            import send_mail
+
+            if send_mail.should_send_email():
+                mail_info = send_mail.send_excel(OUTPUT_FILE)
+                logger.info(
+                    "Wysłano Excel: %s → %s (kopia w %s)",
+                    Path(mail_info["file"]).name,
+                    mail_info["to"],
+                    mail_info["sent_folder"],
+                )
+            else:
+                logger.info("Wysyłka e-mail pominięta (SEND_EMAIL=false)")
+        except Exception as exc:
+            logger.error("Nie udało się wysłać e-maila: %s", exc)
+    finally:
+        save_staging(
+            sheets,
+            STAGING_FILE,
+            logger,
+            stage=STAGE_PO_SCRAPE_KONTAKT,
+            data_sheet_names=DATA_SHEET_NAMES,
+            record_to_dict=record_to_dict,
+            extra={"time_limit_hit": claude_report.get("time_limit_hit") or budget.time_limit_hit},
+        )
+
+    return StageResult(time_limit_hit=claude_report.get("time_limit_hit") or budget.time_limit_hit)
+
+
+def _merge_finalize_back_to_staging(
+    staging: dict[str, list[Record]],
+    finalize_sheets: dict[str, list[Record]],
+) -> None:
+    """Po częściowym finalize — aktualizuje rekordy w staging (bez usuwania)."""
+    finalize_by_fp = {
+        record_fingerprint(record): record
+        for records in finalize_sheets.values()
+        for record in records
+    }
+    for category_name in DATA_SHEET_NAMES:
+        for idx, record in enumerate(staging.get(category_name, [])):
+            updated = finalize_by_fp.get(record_fingerprint(record))
+            if updated is not None:
+                staging[category_name][idx] = updated
+
+
+def run_scraper_full(logger: logging.Logger):
+    """Pełny monolityczny pipeline (testy, workflow_dispatch)."""
+    from pipeline_state import StageResult
     processed_records = load_processed_records(logger)
     import_processed_from_json(JSON_OUTPUT_FILE, processed_records, logger)
     prepare_fresh_output_files(logger)
@@ -1752,7 +2264,6 @@ def run_scraper() -> None:
     cache = load_cache(logger)
     session = requests.Session()
     skipped: list[SkippedRecord] = []
-
     sheets: dict[str, list[Record]] = {}
 
     for sheet_name, url in CATEGORIES.items():
@@ -1789,7 +2300,7 @@ def run_scraper() -> None:
     validation_summary = validate_all_records(sheets)
 
     logger.info("--- Google Maps: weryfikacja wszystkich rekordów ---")
-    sheets = run_maps_verification_pipeline(sheets, logger)
+    sheets, _ = run_maps_verification_pipeline(sheets, logger)
     validation_summary = validate_all_records(sheets)
     logger.info(
         "Po Google Maps: OK=%s, wymaga weryfikacji=%s",
@@ -1817,7 +2328,9 @@ def run_scraper() -> None:
     )
 
     logger.info("--- Claude: filtr i spójny rekord JSON ---")
-    sheets = run_claude_record_normalization_pipeline(sheets, skipped, logger, contact_report)
+    sheets, contact_report = run_claude_record_normalization_pipeline(
+        sheets, skipped, logger, contact_report
+    )
     validation_summary = validate_all_records(sheets)
     save_json_dataset(
         sheets,
@@ -1877,8 +2390,7 @@ def run_scraper() -> None:
         validation_summary["ok"],
         validation_summary["total"],
     )
-
-    logger.info("=== KONIEC ===")
+    return StageResult()
 
 
 if __name__ == "__main__":

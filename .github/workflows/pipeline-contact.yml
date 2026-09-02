@@ -1,0 +1,56 @@
+name: Pipeline — Contact
+
+on:
+  workflow_dispatch:
+  schedule:
+    # Sobota 02:00 PL (CEST) = 00:00 UTC
+    - cron: "0 0 * * 6"
+    # Sobota 18:00 PL (CEST) = 16:00 UTC
+    - cron: "0 16 * * 6"
+
+jobs:
+  contact:
+    runs-on: ubuntu-latest
+    timeout-minutes: 240
+    env:
+      PIPELINE_STAGE: contact
+      MAX_RUNTIME_SECONDS: "14400"
+      CONTACT_BATCH_LIMIT: "250"
+      ENABLE_CONTACT_ENRICHMENT: "true"
+      SERPER_API_KEY: ${{ secrets.SERPER_API_KEY }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/cache@v4
+        with:
+          path: |
+            neueroeffnung_staging.json
+            neueroeffnung_contact_cache.json
+            neueroeffnung_contact_batch.json
+            neueroeffnung_maps_cache.json
+            neueroeffnung_processed.json
+          key: pipeline-${{ github.ref_name }}-${{ hashFiles('neueroeffnung_staging.json', 'neueroeffnung_contact_cache.json') }}
+          restore-keys: |
+            pipeline-${{ github.ref_name }}-
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.13"
+
+      - name: Install dependencies
+        run: pip install -r requirements.txt
+
+      - name: Run contact discovery
+        run: python neueroeffnung_scraper.py
+
+      - name: Upload staging artifact
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: pipeline-staging-contact
+          path: |
+            neueroeffnung_staging.json
+            neueroeffnung_contact_cache.json
+            neueroeffnung_contact_batch.json
+            neueroeffnung_scraper.log
+          if-no-files-found: ignore

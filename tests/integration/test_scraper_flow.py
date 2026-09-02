@@ -151,6 +151,7 @@ class TestRunScraperEndToEnd:
         monkeypatch.setattr(scraper, "CACHE_FILE", tmp_path / "cache.json")
         monkeypatch.setattr(scraper, "PROCESSED_RECORDS_FILE", tmp_path / "processed.json")
         monkeypatch.setattr(scraper, "LOG_FILE", tmp_path / "test.log")
+        monkeypatch.setenv("PIPELINE_STAGE", "full")
         monkeypatch.setenv("ENABLE_CONTACT_ENRICHMENT", "false")
         monkeypatch.setenv("ENABLE_CLAUDE_RECORD_NORMALIZE", "false")
         monkeypatch.setenv("ENABLE_GOOGLE_MAPS_ENRICHMENT", "false")

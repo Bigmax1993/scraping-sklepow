@@ -4,8 +4,8 @@ Scraper neueroeffnung.info → JSON → Walidacja → Excel
 Kategorie (Excel): Markets, Restaurants, Drugstores, Shopping centers
 Analityka: Schedule, By region, Validation report, Skipped
 
-Pipeline: Scraping → JSON → Walidacja (+ retry) → Google Maps (wszystkie rekordy) → filtr godzin pracy → Excel
-Kolumny Excel (EN): Company name | Address | Closing date | Opening date | Information | Entry type | Validation status | Missing fields
+Pipeline: Scraping → JSON → Walidacja (+ retry) → Google Maps → Kontakty (web + Claude) → filtr godzin pracy → Excel
+Kolumny Excel (EN): Company name | Address | Closing date | Opening date | Information | Entry type | Validation status | Missing fields | Phone | Email | Contact person
 """
 
 from __future__ import annotations
@@ -87,7 +87,11 @@ EXCEL_COLUMNS = (
     "Entry type",
     "Validation status",
     "Missing fields",
+    "Phone",
+    "Email",
+    "Contact person",
 )
+CONTACT_EXCEL_COLUMNS = ("Phone", "Email", "Contact person")
 VALIDATION_REPORT_COLUMNS = (
     "Category",
     "Company name",
@@ -98,6 +102,9 @@ VALIDATION_REPORT_COLUMNS = (
     "Validation status",
     "Missing fields",
     "Retry attempts",
+    "Phone",
+    "Email",
+    "Contact person",
 )
 HARMONOGRAM_COLUMNS = (
     "Category",
@@ -107,6 +114,9 @@ HARMONOGRAM_COLUMNS = (
     "Opening date",
     "Entry type",
     "Information",
+    "Phone",
+    "Email",
+    "Contact person",
 )
 REGION_COLUMNS = (
     "Bundesland",
@@ -118,6 +128,9 @@ REGION_COLUMNS = (
     "Closing date",
     "Opening date",
     "Entry type",
+    "Phone",
+    "Email",
+    "Contact person",
 )
 SKIPPED_COLUMNS = (
     "Category",
@@ -253,6 +266,12 @@ class Record:
     proby_ponowienia: int = 0
     godziny_pracy: str = ""
     maps_zweryfikowany: bool = False
+    telefon: str = ""
+    email: str = ""
+    website: str = ""
+    osoba_kontaktowa: str = ""
+    kontakt_zweryfikowany: bool = False
+    kontakt_zrodlo: str = ""
 
 
 @dataclass
@@ -486,6 +505,12 @@ def clean_record(record: Record, logger: logging.Logger) -> Record:
         proby_ponowienia=record.proby_ponowienia,
         godziny_pracy=clean_text_local(record.godziny_pracy),
         maps_zweryfikowany=record.maps_zweryfikowany,
+        telefon=clean_text_local(record.telefon),
+        email=clean_text_local(record.email).lower(),
+        website=clean_text_local(record.website),
+        osoba_kontaktowa=clean_text_local(record.osoba_kontaktowa),
+        kontakt_zweryfikowany=record.kontakt_zweryfikowany,
+        kontakt_zrodlo=clean_text_local(record.kontakt_zrodlo),
     )
 
 
@@ -1410,6 +1435,104 @@ def run_maps_enrichment_pipeline(
     return run_maps_verification_pipeline(sheets, logger)
 
 
+def apply_contact_data_to_record(record: Record, contact) -> None:
+    if contact.telefon:
+        record.telefon = contact.telefon
+    if contact.email:
+        record.email = contact.email
+    if contact.website:
+        record.website = contact.website
+    if contact.osoba_kontaktowa:
+        record.osoba_kontaktowa = contact.osoba_kontaktowa
+    if contact.source_url:
+        record.kontakt_zrodlo = contact.source_url
+    record.kontakt_zweryfikowany = bool(contact.verified)
+
+
+def run_contact_enrichment_pipeline(
+    session: requests.Session,
+    sheets: dict[str, list[Record]],
+    logger: logging.Logger,
+) -> dict[str, list[Record]]:
+    """Uzupełnia brakujące dane kontaktowe (web search + bs4 + opcjonalnie Claude)."""
+    from contact_enrichment import (
+        enrich_record_contacts,
+        is_enrichment_enabled,
+        load_contact_cache,
+        record_needs_contact_enrichment,
+        save_contact_cache,
+    )
+
+    if not is_enrichment_enabled():
+        logger.info("Contact enrichment wyłączone (ENABLE_CONTACT_ENRICHMENT=false)")
+        return sheets
+
+    total = sum(len(sheets.get(name, [])) for name in DATA_SHEET_NAMES)
+    needs = sum(
+        1
+        for name in DATA_SHEET_NAMES
+        for record in sheets.get(name, [])
+        if record_needs_contact_enrichment(
+            record.telefon, record.email, record.website, record.osoba_kontaktowa
+        )
+    )
+    logger.info(
+        "--- Kontakty: weryfikacja %s rekordów (%s wymaga uzupełnienia) ---",
+        total,
+        needs,
+    )
+
+    contact_cache = load_contact_cache(logger)
+    enriched = 0
+    verified = 0
+
+    try:
+        for category_name in DATA_SHEET_NAMES:
+            for idx, record in enumerate(sheets.get(category_name, [])):
+                if not record_needs_contact_enrichment(
+                    record.telefon,
+                    record.email,
+                    record.website,
+                    record.osoba_kontaktowa,
+                ):
+                    continue
+                contact = enrich_record_contacts(
+                    session=session,
+                    company_name=record.nazwa_firmy,
+                    address=record.adres,
+                    telefon=record.telefon,
+                    email=record.email,
+                    website=record.website,
+                    osoba_kontaktowa=record.osoba_kontaktowa,
+                    headers=HEADERS,
+                    cache=contact_cache,
+                    logger=logger,
+                )
+                apply_contact_data_to_record(record, contact)
+                sheets[category_name][idx] = record
+                if contact.has_any():
+                    enriched += 1
+                if contact.verified:
+                    verified += 1
+                    logger.info(
+                        "  ✓ Kontakt: %s | tel=%s | email=%s",
+                        record.nazwa_firmy,
+                        record.telefon or "(brak)",
+                        record.email or "(brak)",
+                    )
+    except Exception as exc:
+        logger.error("Contact enrichment przerwane: %s", exc)
+    finally:
+        save_contact_cache(contact_cache, logger)
+
+    logger.info(
+        "Kontakty: uzupełniono %s rekordów, zweryfikowano przez Claude %s",
+        enriched,
+        verified,
+    )
+    return sheets
+
+
 def build_validation_report_rows(sheets: dict[str, list[Record]]) -> list[list]:
     rows: list[list] = []
     for category_name in DATA_SHEET_NAMES:
@@ -1426,6 +1549,7 @@ def build_validation_report_rows(sheets: dict[str, list[Record]]) -> list[list]:
                         record.status_walidacji,
                         record.brakujace_pola,
                         record.proby_ponowienia,
+                        *record_contact_excel_cells(record),
                     ]
                 )
     rows.sort(key=lambda row: (row[0], row[1]))
@@ -1463,6 +1587,15 @@ def save_validation_report_json(
     logger.info("Zapisano raport braków JSON: %s", output_path.resolve())
 
 
+def record_contact_excel_cells(record: Record) -> list:
+    """Kolumny kontaktowe w Excelu — puste, gdy warstwa enrichment nic nie znalazła."""
+    return [
+        record.telefon,
+        record.email,
+        record.osoba_kontaktowa,
+    ]
+
+
 def record_to_excel_row(record: Record) -> list:
     return [
         record.nazwa_firmy,
@@ -1473,6 +1606,7 @@ def record_to_excel_row(record: Record) -> list:
         record.typ_wpisu,
         record.status_walidacji,
         record.brakujace_pola,
+        *record_contact_excel_cells(record),
     ]
 
 
@@ -1512,6 +1646,7 @@ def build_harmonogram_rows(sheets: dict[str, list[Record]]) -> list[list]:
                         record.data_otwarcia,
                         record.typ_wpisu,
                         record.informacja,
+                        *record_contact_excel_cells(record),
                     ],
                 )
             )
@@ -1535,6 +1670,7 @@ def build_region_rows(sheets: dict[str, list[Record]]) -> list[list]:
                     record.data_zamkniecia,
                     record.data_otwarcia,
                     record.typ_wpisu,
+                    *record_contact_excel_cells(record),
                 ]
             )
     rows.sort(key=lambda row: (row[0], row[2], row[4]))
@@ -1596,7 +1732,11 @@ def write_excel(
         ws.column_dimensions["D"].width = 18
         ws.column_dimensions["E"].width = 18
         ws.column_dimensions["F"].width = 18
-        ws.column_dimensions["G"].width = 80
+        ws.column_dimensions["G"].width = 18
+        ws.column_dimensions["H"].width = 24
+        ws.column_dimensions["I"].width = 18
+        ws.column_dimensions["J"].width = 28
+        ws.column_dimensions["K"].width = 24
 
     wb.save(output_path)
     logger.info("Zapisano Excel: %s", output_path.resolve())
@@ -1673,6 +1813,17 @@ def run_scraper() -> None:
         JSON_OUTPUT_FILE,
         logger,
         stage="po_maps",
+        validation_summary=validation_summary,
+    )
+
+    logger.info("--- Enrichment danych kontaktowych (web + Claude) ---")
+    sheets = run_contact_enrichment_pipeline(session, sheets, logger)
+    validation_summary = validate_all_records(sheets)
+    save_json_dataset(
+        sheets,
+        JSON_OUTPUT_FILE,
+        logger,
+        stage="po_kontakt",
         validation_summary=validation_summary,
     )
 

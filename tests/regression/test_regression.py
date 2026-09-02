@@ -100,6 +100,12 @@ class TestRegressionRecordShape:
             "proby_ponowienia",
             "godziny_pracy",
             "maps_zweryfikowany",
+            "telefon",
+            "email",
+            "website",
+            "osoba_kontaktowa",
+            "kontakt_zweryfikowany",
+            "kontakt_zrodlo",
         )
 
     def test_excel_column_order_unchanged(self, silent_logger, tmp_path):
@@ -114,7 +120,7 @@ class TestRegressionRecordShape:
 
         wb = load_workbook(output_path)
         ws = wb["Markets"]
-        assert [ws.cell(row=1, column=i).value for i in range(1, 9)] == list(
+        assert [ws.cell(row=1, column=i).value for i in range(1, 12)] == list(
             scraper.EXCEL_COLUMNS
         )
 

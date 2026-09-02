@@ -31,12 +31,17 @@ jobs:
         run: python -m pytest tests/ -q
         env:
           ENABLE_GOOGLE_MAPS_ENRICHMENT: "false"
+          ENABLE_CONTACT_ENRICHMENT: "false"
+          ENABLE_CLAUDE_CONTACT_VERIFY: "false"
 
       - name: Run scraper
         run: python neueroeffnung_scraper.py
         env:
           ENABLE_GOOGLE_MAPS_ENRICHMENT: "true"
           GOOGLE_MAPS_HEADLESS: "true"
+          ENABLE_CONTACT_ENRICHMENT: "true"
+          ENABLE_CLAUDE_CONTACT_VERIFY: "true"
+          ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
 
       - name: Upload Excel artifact
         if: always()

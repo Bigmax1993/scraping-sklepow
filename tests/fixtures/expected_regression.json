@@ -62,7 +62,10 @@
       "Information",
       "Entry type",
       "Validation status",
-      "Missing fields"
+      "Missing fields",
+      "Phone",
+      "Email",
+      "Contact person"
     ],
     "data_sheet_names": [
       "Markets",

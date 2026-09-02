@@ -149,7 +149,10 @@ class TestRunScraperEndToEnd:
         monkeypatch.setattr(scraper, "JSON_OUTPUT_FILE", tmp_path / "out.json")
         monkeypatch.setattr(scraper, "VALIDATION_REPORT_FILE", tmp_path / "raport.json")
         monkeypatch.setattr(scraper, "CACHE_FILE", tmp_path / "cache.json")
+        monkeypatch.setattr(scraper, "PROCESSED_RECORDS_FILE", tmp_path / "processed.json")
         monkeypatch.setattr(scraper, "LOG_FILE", tmp_path / "test.log")
+        monkeypatch.setenv("ENABLE_CONTACT_ENRICHMENT", "false")
+        monkeypatch.setenv("ENABLE_GOOGLE_MAPS_ENRICHMENT", "false")
 
         market_html = load_fixture("list_page_linked.html")
         detail_html = load_fixture("detail_rewe_esch.html")

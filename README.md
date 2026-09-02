@@ -96,6 +96,9 @@ Każde uruchomienie **nadpisuje** pliki wynikowe od zera — dane nie są dopisy
 | Entry type | `Neueröffnung` or `Reopening` |
 | Validation status | `OK` or `Needs review` |
 | Missing fields | E.g. `information`, `address (incomplete)` |
+| Phone | Telefon (pusty, jeśli enrichment nic nie znalazł) |
+| Email | Adres e-mail (pusty, jeśli brak) |
+| Contact person | Imię i nazwisko osoby kontaktowej (pusta kolumna, jeśli brak) |
 
 ---
 
@@ -154,12 +157,18 @@ Obsługiwane formaty: `03.09.2026`, `2. Halbjahr 2026`, `4. Quartal 2028`, `2027
 
 **Twarda reguła przed Excel:** rekordy z godzinami pracy w JSON (pole `godziny_pracy` z Maps lub wzorzec w tekście) trafiają tylko do **Skipped**, nie do Excela.
 
+4. **Dane kontaktowe (web + Claude)** — po Maps: wyszukiwanie strony (nazwa + adres), scraping telefon/e-mail/WWW, weryfikacja Claude; brak danych nie blokuje rekordu.
+
 Zmienne środowiskowe:
 
 | Zmienna | Domyślnie | Opis |
 |---------|-----------|------|
 | `ENABLE_GOOGLE_MAPS_ENRICHMENT` | `true` | Włącza warstwę Google Maps |
 | `GOOGLE_MAPS_HEADLESS` | `true` | Przeglądarka w tle (bez okna) |
+| `ENABLE_CONTACT_ENRICHMENT` | `true` | Wyszukiwanie stron i scraping kontaktów |
+| `ENABLE_CLAUDE_CONTACT_VERIFY` | `true` | Weryfikacja kontaktów przez Claude |
+| `ANTHROPIC_API_KEY` | — | Klucz API Anthropic (GitHub Secret) |
+| `CLAUDE_CONTACT_MODEL` | `claude-sonnet-4-6` | Model do weryfikacji kontaktów |
 
 Cache wyników Maps: `neueroeffnung_maps_cache.json` (nie jest usuwany przy każdym runie).
 
@@ -172,6 +181,7 @@ Cache wyników Maps: `neueroeffnung_maps_cache.json` (nie jest usuwany przy każ
 | `neueroeffnung_detail_cache.json` | Cache stron szczegółów (adres, daty, informacja) |
 | `neueroeffnung_maps_cache.json` | Cache adresów z Google Maps |
 | `neueroeffnung_processed.json` | Rejestr rekordów już wyeksportowanych do Excel |
+| `neueroeffnung_contact_cache.json` | Cache danych kontaktowych (web/Claude) |
 | `neueroeffnung_scraper.log` | Szczegółowy log |
 
 Przy problemach z brakującymi danymi usuń cache i uruchom ponownie:

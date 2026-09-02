@@ -55,6 +55,7 @@ SHEET_SKIPPED = "Skipped"
 SKIP_REASON_OUT_OF_RANGE = "Opening date outside Q3 2026 – Q4 2028"
 SKIP_REASON_WORKING_HOURS = "Contains working hours"
 SKIP_REASON_ALREADY_EXPORTED = "Already exported in previous run"
+SKIP_REASON_CLAUDE_REJECT = "Rejected by Claude record filter"
 
 HEADERS = {
     "User-Agent": (
@@ -272,6 +273,7 @@ class Record:
     osoba_kontaktowa: str = ""
     kontakt_zweryfikowany: bool = False
     kontakt_zrodlo: str = ""
+    claude_zweryfikowany: bool = False
 
 
 @dataclass
@@ -511,6 +513,7 @@ def clean_record(record: Record, logger: logging.Logger) -> Record:
         osoba_kontaktowa=clean_text_local(record.osoba_kontaktowa),
         kontakt_zweryfikowany=record.kontakt_zweryfikowany,
         kontakt_zrodlo=clean_text_local(record.kontakt_zrodlo),
+        claude_zweryfikowany=record.claude_zweryfikowany,
     )
 
 
@@ -1445,17 +1448,18 @@ def run_contact_enrichment_pipeline(
     session: requests.Session,
     sheets: dict[str, list[Record]],
     logger: logging.Logger,
-) -> dict[str, list[Record]]:
-    """Uzupełnia brakujące dane kontaktowe (Serper batch → scrape → Claude batch)."""
+) -> tuple[dict[str, list[Record]], dict]:
+    """Serper batch + scrape (bez Claude — weryfikacja w claude_record_normalizer)."""
     from contact_enrichment import (
         is_enrichment_enabled,
         record_needs_contact_enrichment,
         run_batch_contact_enrichment,
     )
 
+    empty_report: dict = {"jobs_total": 0, "jobs": []}
     if not is_enrichment_enabled():
         logger.info("Contact enrichment wyłączone (ENABLE_CONTACT_ENRICHMENT=false)")
-        return sheets
+        return sheets, empty_report
 
     total = sum(len(sheets.get(name, [])) for name in DATA_SHEET_NAMES)
     needs = sum(
@@ -1467,7 +1471,7 @@ def run_contact_enrichment_pipeline(
         )
     )
     logger.info(
-        "--- Kontakty batch: %s rekordów (%s wymaga uzupełnienia) ---",
+        "--- Kontakty batch (Serper + scrape): %s rekordów (%s wymaga uzupełnienia) ---",
         total,
         needs,
     )
@@ -1477,13 +1481,44 @@ def run_contact_enrichment_pipeline(
             session, sheets, DATA_SHEET_NAMES, HEADERS, logger
         )
         logger.info(
-            "Kontakty batch zakończone: jobów=%s, uzupełniono=%s, zweryfikowano=%s",
+            "Kontakty scrape zakończone: jobów=%s, cached=%s",
             report.get("jobs_total", 0),
-            report.get("enriched", 0),
-            report.get("verified", 0),
+            report.get("cached_hits", 0),
         )
     except Exception as exc:
         logger.error("Contact enrichment przerwane: %s", exc)
+        return sheets, empty_report
+    return sheets, report
+
+
+def run_claude_record_normalization_pipeline(
+    sheets: dict[str, list[Record]],
+    skipped: list[SkippedRecord],
+    logger: logging.Logger,
+    contact_report: dict | None = None,
+) -> dict[str, list[Record]]:
+    """Claude: filtr jakości + spójny opis + weryfikacja kontaktów."""
+    from claude_record_normalizer import is_record_normalization_enabled, run_claude_record_normalization
+
+    if not is_record_normalization_enabled():
+        logger.info("Claude record normalize wyłączone")
+        return sheets
+
+    logger.info("--- Claude: filtr rekordów i spójny wpis JSON ---")
+    sheets, report = run_claude_record_normalization(
+        sheets,
+        DATA_SHEET_NAMES,
+        skipped,
+        SKIP_REASON_CLAUDE_REJECT,
+        SkippedRecord,
+        logger,
+        contact_report=contact_report,
+    )
+    logger.info(
+        "Claude rekordy: zaakceptowano=%s, odrzucono=%s",
+        report.get("accepted", 0),
+        report.get("rejected", 0),
+    )
     return sheets
 
 
@@ -1770,8 +1805,19 @@ def run_scraper() -> None:
         validation_summary=validation_summary,
     )
 
-    logger.info("--- Enrichment danych kontaktowych (web + Claude) ---")
-    sheets = run_contact_enrichment_pipeline(session, sheets, logger)
+    logger.info("--- Enrichment danych kontaktowych (Serper + scrape) ---")
+    sheets, contact_report = run_contact_enrichment_pipeline(session, sheets, logger)
+    validation_summary = validate_all_records(sheets)
+    save_json_dataset(
+        sheets,
+        JSON_OUTPUT_FILE,
+        logger,
+        stage="po_scrape_kontakt",
+        validation_summary=validation_summary,
+    )
+
+    logger.info("--- Claude: filtr i spójny rekord JSON ---")
+    sheets = run_claude_record_normalization_pipeline(sheets, skipped, logger, contact_report)
     validation_summary = validate_all_records(sheets)
     save_json_dataset(
         sheets,

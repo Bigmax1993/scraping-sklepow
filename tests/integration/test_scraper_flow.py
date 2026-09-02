@@ -152,6 +152,7 @@ class TestRunScraperEndToEnd:
         monkeypatch.setattr(scraper, "PROCESSED_RECORDS_FILE", tmp_path / "processed.json")
         monkeypatch.setattr(scraper, "LOG_FILE", tmp_path / "test.log")
         monkeypatch.setenv("ENABLE_CONTACT_ENRICHMENT", "false")
+        monkeypatch.setenv("ENABLE_CLAUDE_RECORD_NORMALIZE", "false")
         monkeypatch.setenv("ENABLE_GOOGLE_MAPS_ENRICHMENT", "false")
         # Izolacja E2E — pytest może reuse tmp_path; pusty rejestr = świeży run.
         (tmp_path / "processed.json").write_text('{"fingerprints": []}', encoding="utf-8")

@@ -565,7 +565,7 @@ def run_batch_contact_enrichment(
     headers: dict,
     logger: logging.Logger,
 ) -> tuple[dict[str, list[Any]], dict]:
-    """Pełny batch: Serper → scrape → Claude → raport JSON."""
+    """Batch: Serper → scrape (Claude w claude_record_normalizer)."""
     contact_cache = load_contact_cache(logger)
     jobs, cached_hits = build_contact_enrichment_jobs(
         sheets, data_sheet_names, contact_cache, logger
@@ -577,7 +577,6 @@ def run_batch_contact_enrichment(
     report: dict[str, Any] = {
         "generated_at": datetime.now().isoformat(timespec="seconds"),
         "serper_enabled": bool(get_serper_api_key()),
-        "claude_enabled": is_claude_verification_enabled(),
         "jobs_total": len(jobs),
         "cached_hits": len(cached_hits),
         "jobs": [],
@@ -598,32 +597,13 @@ def run_batch_contact_enrichment(
                 job.target_url = job.website.strip()
 
     batch_scrape_jobs(jobs, session, headers, logger)
-    batch_verify_contacts_with_claude(jobs, logger)
 
-    enriched = 0
-    verified_count = 0
     for job in jobs:
-        contact = finalize_job_contact(job)
-        apply_contact_to_record(sheets[job.category][job.record_index], contact)
-        key = contact_cache_key(job.company_name, job.address)
-        if contact.verified:
-            contact_cache[key] = {**asdict(contact), "verified": True}
         report["jobs"].append(job_to_batch_entry(job))
-        if contact.verified and contact.has_any():
-            enriched += 1
-        if contact.verified:
-            verified_count += 1
 
-    report["enriched"] = enriched
-    report["verified"] = verified_count
     save_contact_cache(contact_cache, logger)
     save_contact_batch_report(report, logger)
-    logger.info(
-        "Kontakty batch: %s jobów, uzupełniono %s, zweryfikowano %s",
-        len(jobs),
-        enriched,
-        verified_count,
-    )
+    logger.info("Kontakty scrape batch: %s jobów", len(jobs))
     return sheets, report
 
 
@@ -673,8 +653,4 @@ def enrich_record_contacts(
         job.target_url = website.strip()
 
     batch_scrape_jobs([job], session, headers, logger)
-    batch_verify_contacts_with_claude([job], logger)
-    contact = finalize_job_contact(job)
-    if contact.verified:
-        cache[key] = {**asdict(contact), "verified": True}
-    return contact
+    return job.scraped if job.scraped.has_any() else ContactData(source_url=job.target_url)

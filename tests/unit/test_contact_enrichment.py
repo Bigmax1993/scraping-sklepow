@@ -198,9 +198,7 @@ class TestRunBatchContactEnrichment:
         assert report["jobs_total"] == 1
         assert (tmp_path / "batch.json").exists()
 
-    def test_record_still_exported_when_contacts_rejected(self, silent_logger, monkeypatch, tmp_path):
-        monkeypatch.setenv("ENABLE_CLAUDE_CONTACT_VERIFY", "true")
-        monkeypatch.setenv("ANTHROPIC_API_KEY", "k")
+    def test_scrape_only_does_not_apply_contacts(self, silent_logger, monkeypatch, tmp_path):
         monkeypatch.delenv("SERPER_API_KEY", raising=False)
         monkeypatch.setattr(ce, "CONTACT_CACHE_FILE", tmp_path / "cache.json")
         monkeypatch.setattr(ce, "CONTACT_BATCH_REPORT_FILE", tmp_path / "batch.json")
@@ -229,31 +227,20 @@ class TestRunBatchContactEnrichment:
                 )
 
             mock_scrape.side_effect = fill_scraped
-            with patch.object(
-                ce,
-                "batch_verify_contacts_with_claude",
-                side_effect=lambda jobs, logger: [
-                    setattr(jobs[0], "verified", ce.ContactData(verified=False)) or None
-                    for _ in [0]
-                ],
-            ):
-                result_sheets, _ = ce.run_batch_contact_enrichment(
-                    MagicMock(),
-                    sheets,
-                    scraper.DATA_SHEET_NAMES,
-                    {},
-                    silent_logger,
-                )
+            result_sheets, report = ce.run_batch_contact_enrichment(
+                MagicMock(),
+                sheets,
+                scraper.DATA_SHEET_NAMES,
+                {},
+                silent_logger,
+            )
 
         assert len(result_sheets["Markets"]) == 1
-        assert result_sheets["Markets"][0].nazwa_firmy == "Example Shop"
         assert result_sheets["Markets"][0].email == ""
-        assert result_sheets["Markets"][0].telefon == ""
+        assert report["jobs"][0]["scraped"]["email"] == "maybe@wrong.de"
 
-    def test_saves_batch_report_with_serper_and_claude(self, silent_logger, monkeypatch, tmp_path):
+    def test_saves_batch_report_with_serper(self, silent_logger, monkeypatch, tmp_path):
         monkeypatch.setenv("SERPER_API_KEY", "k")
-        monkeypatch.setenv("ANTHROPIC_API_KEY", "k")
-        monkeypatch.setenv("ENABLE_CLAUDE_CONTACT_VERIFY", "true")
         monkeypatch.setattr(ce, "CONTACT_CACHE_FILE", tmp_path / "cache.json")
         monkeypatch.setattr(ce, "CONTACT_BATCH_REPORT_FILE", tmp_path / "batch.json")
 
@@ -269,13 +256,11 @@ class TestRunBatchContactEnrichment:
 
         with patch.object(ce, "batch_serper_search"):
             with patch.object(ce, "batch_scrape_jobs"):
-                with patch.object(ce, "batch_verify_contacts_with_claude"):
-                    _, report = ce.run_batch_contact_enrichment(
-                        MagicMock(), sheets, scraper.DATA_SHEET_NAMES, {}, silent_logger
-                    )
+                _, report = ce.run_batch_contact_enrichment(
+                    MagicMock(), sheets, scraper.DATA_SHEET_NAMES, {}, silent_logger
+                )
 
         assert report["serper_enabled"] is True
-        assert report["claude_enabled"] is True
 
 
 class TestEnrichRecordContactsCompat:
@@ -348,15 +333,8 @@ class TestApplyContactPipeline:
         with patch(
             "contact_enrichment.run_batch_contact_enrichment",
             return_value=(sheets, fake_report),
-        ) as mock_batch:
-            def apply_contacts(session, sh, names, headers, logger):
-                sh["Markets"][0].email = "test@shop.de"
-                sh["Markets"][0].kontakt_zweryfikowany = True
-                return sh, fake_report
+        ):
+            sheets, report = scraper.run_contact_enrichment_pipeline(MagicMock(), sheets, silent_logger)
 
-            mock_batch.side_effect = apply_contacts
-            result = scraper.run_contact_enrichment_pipeline(MagicMock(), sheets, silent_logger)
-
-        updated = result["Markets"][0]
-        assert updated.email == "test@shop.de"
-        assert updated.kontakt_zweryfikowany is True
+        updated = sheets["Markets"][0]
+        assert report["jobs_total"] == 1

@@ -34,6 +34,7 @@ jobs:
           ENABLE_GOOGLE_MAPS_ENRICHMENT: "false"
           ENABLE_CONTACT_ENRICHMENT: "false"
           ENABLE_CLAUDE_CONTACT_VERIFY: "false"
+          ENABLE_CLAUDE_RECORD_NORMALIZE: "false"
 
       - name: Run scraper
         run: python neueroeffnung_scraper.py
@@ -42,6 +43,7 @@ jobs:
           GOOGLE_MAPS_HEADLESS: "true"
           ENABLE_CONTACT_ENRICHMENT: "true"
           ENABLE_CLAUDE_CONTACT_VERIFY: "true"
+          ENABLE_CLAUDE_RECORD_NORMALIZE: "true"
           ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
           SERPER_API_KEY: ${{ secrets.SERPER_API_KEY }}
 
@@ -55,5 +57,6 @@ jobs:
             neueroeffnung_wynik.json
             neueroeffnung_raport_brakow.json
             neueroeffnung_contact_batch.json
+            neueroeffnung_claude_records.json
             neueroeffnung_scraper.log
           if-no-files-found: ignore

@@ -157,7 +157,7 @@ Obsługiwane formaty: `03.09.2026`, `2. Halbjahr 2026`, `4. Quartal 2028`, `2027
 
 **Twarda reguła przed Excel:** rekordy z godzinami pracy w JSON (pole `godziny_pracy` z Maps lub wzorzec w tekście) trafiają tylko do **Skipped**, nie do Excela.
 
-4. **Dane kontaktowe (web + Claude)** — po Maps: wyszukiwanie strony (nazwa + adres), scraping telefon/e-mail/WWW, weryfikacja Claude; brak danych nie blokuje rekordu.
+4. **Dane kontaktowe (Serper batch + scrape + Claude batch)** — po Maps: zbiorcze wyszukiwanie Serper, scraping stron (requests + bs4), zbiorcza weryfikacja Claude. **Tylko `verified=true` trafia do JSON/Excel**; odrzucone dane zostają w `neueroeffnung_contact_batch.json` (audyt). Rekord bez kontaktów przechodzi dalej.
 
 Zmienne środowiskowe:
 
@@ -165,10 +165,12 @@ Zmienne środowiskowe:
 |---------|-----------|------|
 | `ENABLE_GOOGLE_MAPS_ENRICHMENT` | `true` | Włącza warstwę Google Maps |
 | `GOOGLE_MAPS_HEADLESS` | `true` | Przeglądarka w tle (bez okna) |
-| `ENABLE_CONTACT_ENRICHMENT` | `true` | Wyszukiwanie stron i scraping kontaktów |
-| `ENABLE_CLAUDE_CONTACT_VERIFY` | `true` | Weryfikacja kontaktów przez Claude |
+| `ENABLE_CONTACT_ENRICHMENT` | `true` | Wyszukiwanie stron (Serper batch) i scraping kontaktów |
+| `ENABLE_CLAUDE_CONTACT_VERIFY` | `true` | Zbiorcza weryfikacja kontaktów przez Claude |
 | `ANTHROPIC_API_KEY` | — | Klucz API Anthropic (GitHub Secret) |
+| `SERPER_API_KEY` | — | Klucz API Serper (GitHub Secret) |
 | `CLAUDE_CONTACT_MODEL` | `claude-sonnet-4-6` | Model do weryfikacji kontaktów |
+| `CONTACT_CLAUDE_BATCH_SIZE` | `20` | Liczba rekordów na jedno wywołanie Claude |
 
 Cache wyników Maps: `neueroeffnung_maps_cache.json` (nie jest usuwany przy każdym runie).
 
@@ -182,6 +184,7 @@ Cache wyników Maps: `neueroeffnung_maps_cache.json` (nie jest usuwany przy każ
 | `neueroeffnung_maps_cache.json` | Cache adresów z Google Maps |
 | `neueroeffnung_processed.json` | Rejestr rekordów już wyeksportowanych do Excel |
 | `neueroeffnung_contact_cache.json` | Cache danych kontaktowych (web/Claude) |
+| `neueroeffnung_contact_batch.json` | Raport batch: Serper, scrape, weryfikacja Claude |
 | `neueroeffnung_scraper.log` | Szczegółowy log |
 
 Przy problemach z brakującymi danymi usuń cache i uruchom ponownie:
@@ -251,7 +254,7 @@ Secrets są używane przez workflow **Run scraper**.
 
 | Uruchomienie | Kiedy |
 |--------------|--------|
-| **Automatycznie** | Każda **niedziela o 23:30** (czas polski, CEST) |
+| **Automatycznie** | Każda **niedziela o 04:30** (czas polski, CEST) |
 | **Ręcznie** | Actions → Run scraper → Run workflow |
 
 Pliki wynikowe trafiają też do artifactów GitHub Actions.

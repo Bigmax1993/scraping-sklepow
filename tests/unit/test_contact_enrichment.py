@@ -1,4 +1,4 @@
-"""Testy enrichmentu danych kontaktowych."""
+"""Testy enrichmentu danych kontaktowych (batch Serper → scrape → Claude)."""
 
 from __future__ import annotations
 
@@ -32,19 +32,253 @@ class TestExtractContactsFromHtml:
 
 class TestRecordNeedsContactEnrichment:
     @pytest.mark.parametrize(
-        "telefon,email,website,needs",
+        "telefon,email,website,osoba,needs",
         [
-            ("+49 89 123", "a@b.de", "https://x.de", False),
-            ("+49 89 123", "", "https://x.de", True),
-            ("", "a@b.de", "https://x.de", True),
-            ("", "", "", True),
+            ("+49 89 123", "a@b.de", "https://x.de", "Max M", False),
+            ("+49 89 123", "a@b.de", "https://x.de", "", True),
+            ("+49 89 123", "", "https://x.de", "Max M", True),
+            ("", "", "", "", True),
         ],
     )
-    def test_detects_missing_contact_fields(self, telefon, email, website, needs):
-        assert ce.record_needs_contact_enrichment(telefon, email, website, "") is needs
+    def test_detects_missing_contact_fields(self, telefon, email, website, osoba, needs):
+        assert ce.record_needs_contact_enrichment(telefon, email, website, osoba) is needs
 
 
-class TestEnrichRecordContacts:
+class TestBatchSerper:
+    def test_batch_serper_sets_target_urls(self, silent_logger, monkeypatch):
+        monkeypatch.setenv("SERPER_API_KEY", "test-key")
+        jobs = [
+            ce.ContactEnrichmentJob(
+                job_id="1",
+                category="Markets",
+                record_index=0,
+                company_name="Example Shop",
+                address="81675 München",
+                missing_fields=["telefon", "email"],
+            )
+        ]
+        with patch.object(ce, "serper_search_url", return_value="https://example-shop.de"):
+            ce.batch_serper_search(jobs, "test-key", silent_logger)
+        assert jobs[0].target_url == "https://example-shop.de"
+        assert "Impressum" in jobs[0].serper_query
+
+
+class TestFinalizeJobContact:
+    def test_rejected_scraped_data_not_written_to_record(self, silent_logger):
+        import neueroeffnung_scraper as scraper
+
+        job = ce.ContactEnrichmentJob(
+            job_id="1",
+            category="Markets",
+            record_index=0,
+            company_name="Shop",
+            address="Adres",
+            scraped=ce.ContactData(
+                telefon="+49 123",
+                email="maybe@wrong.de",
+                source_url="https://example.de",
+            ),
+            verified=ce.ContactData(verified=False),
+            target_url="https://example.de",
+        )
+        contact = ce.finalize_job_contact(job)
+        record = scraper.Record("Shop", "Adres", "", "03.09.2026")
+        ce.apply_contact_to_record(record, contact)
+
+        assert contact.telefon == ""
+        assert contact.email == ""
+        assert record.telefon == ""
+        assert record.email == ""
+        assert record.kontakt_zweryfikowany is False
+
+    def test_verified_data_written_to_record(self):
+        import neueroeffnung_scraper as scraper
+
+        contact = ce.ContactData(
+            telefon="+49 123",
+            email="ok@shop.de",
+            verified=True,
+            source_url="https://shop.de",
+        )
+        record = scraper.Record("Shop", "Adres", "", "03.09.2026")
+        ce.apply_contact_to_record(record, contact)
+
+        assert record.telefon == "+49 123"
+        assert record.email == "ok@shop.de"
+        assert record.kontakt_zweryfikowany is True
+
+
+class TestBatchClaude:
+    def test_batch_verify_applies_results(self, silent_logger, monkeypatch):
+        monkeypatch.setenv("ENABLE_CLAUDE_CONTACT_VERIFY", "true")
+        monkeypatch.setenv("ANTHROPIC_API_KEY", "test-key")
+        job = ce.ContactEnrichmentJob(
+            job_id="1",
+            category="Markets",
+            record_index=0,
+            company_name="Example Shop",
+            address="81675 München",
+            scraped=ce.ContactData(email="info@example-shop.de", source_url="https://x.de"),
+            html_snippet="<html></html>",
+        )
+
+        fake_response = MagicMock()
+        fake_response.content = [
+            MagicMock(
+                text=json.dumps(
+                    {
+                        "records": [
+                            {
+                                "id": "1",
+                                "telefon": "+49 89 123",
+                                "email": "info@example-shop.de",
+                                "website": "https://example-shop.de",
+                                "osoba_kontaktowa": "Max Mustermann",
+                                "verified": True,
+                            }
+                        ]
+                    }
+                )
+            )
+        ]
+
+        with patch("anthropic.Anthropic") as anthropic_cls:
+            anthropic_cls.return_value.messages.create.return_value = fake_response
+            ce.batch_verify_contacts_with_claude([job], silent_logger)
+
+        assert job.verified.verified is True
+        assert job.verified.email == "info@example-shop.de"
+        assert job.verified.osoba_kontaktowa == "Max Mustermann"
+
+
+class TestRunBatchContactEnrichment:
+    def test_full_batch_pipeline(self, silent_logger, monkeypatch, tmp_path):
+        monkeypatch.setenv("ENABLE_CLAUDE_CONTACT_VERIFY", "false")
+        monkeypatch.delenv("SERPER_API_KEY", raising=False)
+        monkeypatch.setattr(ce, "CONTACT_CACHE_FILE", tmp_path / "cache.json")
+        monkeypatch.setattr(ce, "CONTACT_BATCH_REPORT_FILE", tmp_path / "batch.json")
+
+        import neueroeffnung_scraper as scraper
+
+        record = scraper.Record(
+            nazwa_firmy="Example Shop",
+            adres="81675 München",
+            data_zamkniecia="",
+            data_otwarcia="03.09.2026",
+        )
+        sheets = {
+            "Markets": [record],
+            "Restaurants": [],
+            "Drugstores": [],
+            "Shopping centers": [],
+        }
+
+        with patch.object(ce, "batch_serper_search") as mock_serper:
+            with patch.object(ce, "batch_scrape_jobs") as mock_scrape:
+                def fill_scraped(jobs, session, headers, logger):
+                    jobs[0].scraped = ce.ContactData(
+                        email="info@example-shop.de",
+                        telefon="+49 89 123",
+                        source_url="https://example-shop.de",
+                    )
+
+                mock_scrape.side_effect = fill_scraped
+                result_sheets, report = ce.run_batch_contact_enrichment(
+                    MagicMock(),
+                    sheets,
+                    scraper.DATA_SHEET_NAMES,
+                    {},
+                    silent_logger,
+                )
+
+        mock_serper.assert_not_called()
+        assert result_sheets["Markets"][0].email == ""
+        assert result_sheets["Markets"][0].telefon == ""
+        assert result_sheets["Markets"][0].kontakt_zweryfikowany is False
+        assert report["jobs_total"] == 1
+        assert (tmp_path / "batch.json").exists()
+
+    def test_record_still_exported_when_contacts_rejected(self, silent_logger, monkeypatch, tmp_path):
+        monkeypatch.setenv("ENABLE_CLAUDE_CONTACT_VERIFY", "true")
+        monkeypatch.setenv("ANTHROPIC_API_KEY", "k")
+        monkeypatch.delenv("SERPER_API_KEY", raising=False)
+        monkeypatch.setattr(ce, "CONTACT_CACHE_FILE", tmp_path / "cache.json")
+        monkeypatch.setattr(ce, "CONTACT_BATCH_REPORT_FILE", tmp_path / "batch.json")
+
+        import neueroeffnung_scraper as scraper
+
+        record = scraper.Record(
+            nazwa_firmy="Example Shop",
+            adres="81675 München",
+            data_zamkniecia="",
+            data_otwarcia="03.09.2026",
+        )
+        sheets = {
+            "Markets": [record],
+            "Restaurants": [],
+            "Drugstores": [],
+            "Shopping centers": [],
+        }
+
+        with patch.object(ce, "batch_scrape_jobs") as mock_scrape:
+            def fill_scraped(jobs, session, headers, logger):
+                jobs[0].scraped = ce.ContactData(
+                    email="maybe@wrong.de",
+                    telefon="+49 89 123",
+                    source_url="https://example-shop.de",
+                )
+
+            mock_scrape.side_effect = fill_scraped
+            with patch.object(
+                ce,
+                "batch_verify_contacts_with_claude",
+                side_effect=lambda jobs, logger: [
+                    setattr(jobs[0], "verified", ce.ContactData(verified=False)) or None
+                    for _ in [0]
+                ],
+            ):
+                result_sheets, _ = ce.run_batch_contact_enrichment(
+                    MagicMock(),
+                    sheets,
+                    scraper.DATA_SHEET_NAMES,
+                    {},
+                    silent_logger,
+                )
+
+        assert len(result_sheets["Markets"]) == 1
+        assert result_sheets["Markets"][0].nazwa_firmy == "Example Shop"
+        assert result_sheets["Markets"][0].email == ""
+        assert result_sheets["Markets"][0].telefon == ""
+
+    def test_saves_batch_report_with_serper_and_claude(self, silent_logger, monkeypatch, tmp_path):
+        monkeypatch.setenv("SERPER_API_KEY", "k")
+        monkeypatch.setenv("ANTHROPIC_API_KEY", "k")
+        monkeypatch.setenv("ENABLE_CLAUDE_CONTACT_VERIFY", "true")
+        monkeypatch.setattr(ce, "CONTACT_CACHE_FILE", tmp_path / "cache.json")
+        monkeypatch.setattr(ce, "CONTACT_BATCH_REPORT_FILE", tmp_path / "batch.json")
+
+        import neueroeffnung_scraper as scraper
+
+        record = scraper.Record("Shop", "Adres", "", "03.09.2026")
+        sheets = {
+            "Markets": [record],
+            "Restaurants": [],
+            "Drugstores": [],
+            "Shopping centers": [],
+        }
+
+        with patch.object(ce, "batch_serper_search"):
+            with patch.object(ce, "batch_scrape_jobs"):
+                with patch.object(ce, "batch_verify_contacts_with_claude"):
+                    _, report = ce.run_batch_contact_enrichment(
+                        MagicMock(), sheets, scraper.DATA_SHEET_NAMES, {}, silent_logger
+                    )
+
+        assert report["serper_enabled"] is True
+        assert report["claude_enabled"] is True
+
+
+class TestEnrichRecordContactsCompat:
     def test_uses_cache_without_network(self, silent_logger):
         cache = {
             "contact::lidl::32756 detmold": {
@@ -71,15 +305,14 @@ class TestEnrichRecordContacts:
         assert result.email == "info@lidl.de"
         assert result.verified is True
 
-    def test_scrape_and_claude_verify(self, silent_logger, monkeypatch):
+    def test_proceeds_when_no_contacts_found(self, silent_logger, monkeypatch):
         monkeypatch.setenv("ENABLE_CLAUDE_CONTACT_VERIFY", "false")
-        session = MagicMock()
-        with patch.object(ce, "search_web_url", return_value="https://example-shop.de"):
-            with patch.object(ce, "fetch_page_html", return_value=SAMPLE_HTML):
+        with patch.object(ce, "batch_serper_search"):
+            with patch.object(ce, "batch_scrape_jobs"):
                 result = ce.enrich_record_contacts(
-                    session=session,
-                    company_name="Example Shop",
-                    address="81675 München",
+                    session=MagicMock(),
+                    company_name="Unknown",
+                    address="Nowhere",
                     telefon="",
                     email="",
                     website="",
@@ -88,57 +321,6 @@ class TestEnrichRecordContacts:
                     cache={},
                     logger=silent_logger,
                 )
-        assert result.email == "info@example-shop.de"
-        assert result.verified is True
-
-    def test_claude_html_fallback(self, silent_logger, monkeypatch):
-        monkeypatch.setenv("ENABLE_CLAUDE_CONTACT_VERIFY", "true")
-        monkeypatch.setenv("ANTHROPIC_API_KEY", "test-key")
-
-        def fake_claude(company, address, contact, html, logger, *, html_only=False):
-            if html_only:
-                return ce.ContactData(
-                    email="kontakt@firma.de",
-                    telefon="+49 89 111",
-                    website="https://firma.de",
-                    verified=True,
-                    source_url=contact.source_url,
-                )
-            return ce.ContactData(verified=False)
-
-        with patch.object(ce, "search_web_url", return_value="https://firma.de"):
-            with patch.object(ce, "fetch_page_html", return_value="<html></html>"):
-                with patch.object(ce, "verify_contacts_with_claude", side_effect=fake_claude):
-                    result = ce.enrich_record_contacts(
-                        session=MagicMock(),
-                        company_name="Firma",
-                        address="München",
-                        telefon="",
-                        email="",
-                        website="",
-                        osoba_kontaktowa="",
-                        headers={},
-                        cache={},
-                        logger=silent_logger,
-                    )
-        assert result.email == "kontakt@firma.de"
-        assert result.verified is True
-
-    def test_proceeds_when_no_contacts_found(self, silent_logger, monkeypatch):
-        monkeypatch.setenv("ENABLE_CLAUDE_CONTACT_VERIFY", "false")
-        with patch.object(ce, "search_web_url", return_value=""):
-            result = ce.enrich_record_contacts(
-                session=MagicMock(),
-                company_name="Unknown",
-                address="Nowhere",
-                telefon="",
-                email="",
-                website="",
-                osoba_kontaktowa="",
-                headers={},
-                cache={},
-                logger=silent_logger,
-            )
         assert result.has_any() is False
         assert result.verified is False
 
@@ -161,18 +343,19 @@ class TestApplyContactPipeline:
             "Shopping centers": [],
         }
 
-        fake_contact = ce.ContactData(
-            telefon="+49 123",
-            email="test@shop.de",
-            website="https://shop.de",
-            verified=True,
-            source_url="https://shop.de",
-        )
+        fake_report = {"jobs_total": 1, "enriched": 1, "verified": 1}
 
-        with patch("contact_enrichment.enrich_record_contacts", return_value=fake_contact):
-            with patch("contact_enrichment.load_contact_cache", return_value={}):
-                with patch("contact_enrichment.save_contact_cache"):
-                    result = scraper.run_contact_enrichment_pipeline(MagicMock(), sheets, silent_logger)
+        with patch(
+            "contact_enrichment.run_batch_contact_enrichment",
+            return_value=(sheets, fake_report),
+        ) as mock_batch:
+            def apply_contacts(session, sh, names, headers, logger):
+                sh["Markets"][0].email = "test@shop.de"
+                sh["Markets"][0].kontakt_zweryfikowany = True
+                return sh, fake_report
+
+            mock_batch.side_effect = apply_contacts
+            result = scraper.run_contact_enrichment_pipeline(MagicMock(), sheets, silent_logger)
 
         updated = result["Markets"][0]
         assert updated.email == "test@shop.de"

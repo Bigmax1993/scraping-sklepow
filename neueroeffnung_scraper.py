@@ -1436,17 +1436,9 @@ def run_maps_enrichment_pipeline(
 
 
 def apply_contact_data_to_record(record: Record, contact) -> None:
-    if contact.telefon:
-        record.telefon = contact.telefon
-    if contact.email:
-        record.email = contact.email
-    if contact.website:
-        record.website = contact.website
-    if contact.osoba_kontaktowa:
-        record.osoba_kontaktowa = contact.osoba_kontaktowa
-    if contact.source_url:
-        record.kontakt_zrodlo = contact.source_url
-    record.kontakt_zweryfikowany = bool(contact.verified)
+    from contact_enrichment import apply_contact_to_record
+
+    apply_contact_to_record(record, contact)
 
 
 def run_contact_enrichment_pipeline(
@@ -1454,13 +1446,11 @@ def run_contact_enrichment_pipeline(
     sheets: dict[str, list[Record]],
     logger: logging.Logger,
 ) -> dict[str, list[Record]]:
-    """Uzupełnia brakujące dane kontaktowe (web search + bs4 + opcjonalnie Claude)."""
+    """Uzupełnia brakujące dane kontaktowe (Serper batch → scrape → Claude batch)."""
     from contact_enrichment import (
-        enrich_record_contacts,
         is_enrichment_enabled,
-        load_contact_cache,
         record_needs_contact_enrichment,
-        save_contact_cache,
+        run_batch_contact_enrichment,
     )
 
     if not is_enrichment_enabled():
@@ -1477,59 +1467,23 @@ def run_contact_enrichment_pipeline(
         )
     )
     logger.info(
-        "--- Kontakty: weryfikacja %s rekordów (%s wymaga uzupełnienia) ---",
+        "--- Kontakty batch: %s rekordów (%s wymaga uzupełnienia) ---",
         total,
         needs,
     )
 
-    contact_cache = load_contact_cache(logger)
-    enriched = 0
-    verified = 0
-
     try:
-        for category_name in DATA_SHEET_NAMES:
-            for idx, record in enumerate(sheets.get(category_name, [])):
-                if not record_needs_contact_enrichment(
-                    record.telefon,
-                    record.email,
-                    record.website,
-                    record.osoba_kontaktowa,
-                ):
-                    continue
-                contact = enrich_record_contacts(
-                    session=session,
-                    company_name=record.nazwa_firmy,
-                    address=record.adres,
-                    telefon=record.telefon,
-                    email=record.email,
-                    website=record.website,
-                    osoba_kontaktowa=record.osoba_kontaktowa,
-                    headers=HEADERS,
-                    cache=contact_cache,
-                    logger=logger,
-                )
-                apply_contact_data_to_record(record, contact)
-                sheets[category_name][idx] = record
-                if contact.has_any():
-                    enriched += 1
-                if contact.verified:
-                    verified += 1
-                    logger.info(
-                        "  ✓ Kontakt: %s | tel=%s | email=%s",
-                        record.nazwa_firmy,
-                        record.telefon or "(brak)",
-                        record.email or "(brak)",
-                    )
+        sheets, report = run_batch_contact_enrichment(
+            session, sheets, DATA_SHEET_NAMES, HEADERS, logger
+        )
+        logger.info(
+            "Kontakty batch zakończone: jobów=%s, uzupełniono=%s, zweryfikowano=%s",
+            report.get("jobs_total", 0),
+            report.get("enriched", 0),
+            report.get("verified", 0),
+        )
     except Exception as exc:
         logger.error("Contact enrichment przerwane: %s", exc)
-    finally:
-        save_contact_cache(contact_cache, logger)
-
-    logger.info(
-        "Kontakty: uzupełniono %s rekordów, zweryfikowano przez Claude %s",
-        enriched,
-        verified,
-    )
     return sheets
 
 

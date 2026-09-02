@@ -153,6 +153,8 @@ class TestRunScraperEndToEnd:
         monkeypatch.setattr(scraper, "LOG_FILE", tmp_path / "test.log")
         monkeypatch.setenv("ENABLE_CONTACT_ENRICHMENT", "false")
         monkeypatch.setenv("ENABLE_GOOGLE_MAPS_ENRICHMENT", "false")
+        # Izolacja E2E — pytest może reuse tmp_path; pusty rejestr = świeży run.
+        (tmp_path / "processed.json").write_text('{"fingerprints": []}', encoding="utf-8")
 
         market_html = load_fixture("list_page_linked.html")
         detail_html = load_fixture("detail_rewe_esch.html")
@@ -163,6 +165,8 @@ class TestRunScraperEndToEnd:
                 return MockHttpResponse(market_html)
             if "gastronomie" in url:
                 return MockHttpResponse(gastro_html)
+            if "drogerie" in url or "einkaufszentrum" in url:
+                return MockHttpResponse("<html><body></body></html>")
             if "/suche/" in url:
                 return MockHttpResponse(load_fixture("search_result_lidl.html"))
             if "rewe-esch" in url or "rewe-test" in url or "detmold" in url:

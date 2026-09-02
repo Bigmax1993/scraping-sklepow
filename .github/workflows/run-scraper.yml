@@ -3,14 +3,15 @@ name: Run scraper
 on:
   workflow_dispatch:
   schedule:
-    # Niedziela 23:30 czasu polskiego (CEST, UTC+2) = 21:30 UTC
-    # Po przejściu na CET (UTC+1) uruchomi się o 22:30 w Polsce — wtedy zmień na: 30 22 * * 0
-    - cron: "30 21 * * 0"
+    # Niedziela 04:30 czasu polskiego (CEST, UTC+2) = 02:30 UTC
+    # Po przejściu na CET (UTC+1) uruchomi się o 03:30 UTC — wtedy zmień na: 30 3 * * 0
+    - cron: "30 2 * * 0"
 
 jobs:
   scrape:
     runs-on: ubuntu-latest
-    timeout-minutes: 360
+    # Max do następnego cronu = 7 dni (10080 min), ale GitHub-hosted runner cap = 72 h (4320 min)
+    timeout-minutes: 4320
     env:
       GMAIL_USER: ${{ secrets.GMAIL_USER }}
       GMAIL_APP_PASSWORD: ${{ secrets.GMAIL_APP_PASSWORD }}
@@ -42,6 +43,7 @@ jobs:
           ENABLE_CONTACT_ENRICHMENT: "true"
           ENABLE_CLAUDE_CONTACT_VERIFY: "true"
           ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
+          SERPER_API_KEY: ${{ secrets.SERPER_API_KEY }}
 
       - name: Upload Excel artifact
         if: always()
@@ -52,5 +54,6 @@ jobs:
             neueroeffnung_wynik.xlsx
             neueroeffnung_wynik.json
             neueroeffnung_raport_brakow.json
+            neueroeffnung_contact_batch.json
             neueroeffnung_scraper.log
           if-no-files-found: ignore

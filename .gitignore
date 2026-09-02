@@ -11,6 +11,7 @@ env/
 neueroeffnung_detail_cache.json
 neueroeffnung_maps_cache.json
 neueroeffnung_contact_cache.json
+neueroeffnung_contact_batch.json
 neueroeffnung_scraper.log
 neueroeffnung_wynik.json
 neueroeffnung_raport_brakow.json

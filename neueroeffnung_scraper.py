@@ -1,11 +1,9 @@
 """
-Scraper neueroeffnung.info → JSON → Walidacja → Excel
+Scraper neueroeffnung.info — pipeline segmentowy lub pełny (PIPELINE_STAGE).
 
 Kategorie (Excel): Markets, Restaurants, Drugstores, Shopping centers
-Analityka: Schedule, By region, Validation report, Skipped
-
-Pipeline: Scraping → JSON → Walidacja (+ retry) → Google Maps → Kontakty (web + Claude) → filtr godzin pracy → Excel
-Kolumny Excel (EN): Company name | Address | Closing date | Opening date | Information | Entry type | Validation status | Missing fields | Phone | Email | Contact person
+Segmenty: discovery → validate → maps → contact → finalize → Excel + mail
+Pełny run: PIPELINE_STAGE=full (monolit dev/test)
 """
 
 from __future__ import annotations

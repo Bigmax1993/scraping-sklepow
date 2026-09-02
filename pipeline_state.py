@@ -1,5 +1,8 @@
 """
-Wspólny stan pipeline'u segmentowego — staging JSON, merge, limity czasu.
+Wspólny stan pipeline'u segmentowego — staging JSON, merge, limity czasu, StageResult.
+
+Segmenty: discovery | validate | maps | contact | finalize
+Dokumentacja: docs/ARCHITEKTURA.md
 """
 
 from __future__ import annotations

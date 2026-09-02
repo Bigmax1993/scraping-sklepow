@@ -197,6 +197,21 @@ python send_mail.py
 
 ---
 
+## GitHub
+
+Repozytorium: [github.com/Bigmax1993/scraping-sklepow](https://github.com/Bigmax1993/scraping-sklepow)
+
+| Secret | Opis |
+|--------|------|
+| `GMAIL_USER` | Konto Gmail (nadawca) |
+| `GMAIL_APP_PASSWORD` | Hasło do aplikacji Gmail |
+
+Secrets są używane przez workflow **Run scraper** (uruchomienie ręczne: Actions → Run scraper → Run workflow). Pliki wynikowe trafiają też do artifactów GitHub Actions.
+
+Lokalnie **nie commituj** haseł — trzymaj je w zmiennych Windows lub GitHub Secrets.
+
+---
+
 ## Testy
 
 ```powershell

@@ -6,26 +6,6 @@ Pipeline produkcyjny jest podzielony na **5 segmentów** uruchamianych osobnymi 
 
 ---
 
-## Szybki start (lokalnie)
-
-```powershell
-cd "C:\Users\svinc\Documents\Automatyczny scraping sklepow"
-
-python -m venv .venv
-.\.venv\Scripts\Activate.ps1
-pip install -r requirements.txt
-playwright install chromium   # tylko dla segmentu maps / full
-
-# Jeden segment (zalecane):
-$env:PIPELINE_STAGE = "discovery"
-python neueroeffnung_scraper.py
-
-# Pełny monolit (dev / test):
-$env:PIPELINE_STAGE = "full"
-python neueroeffnung_scraper.py
-```
-
----
 
 ## Pipeline segmentowy (produkcja)
 

@@ -4,7 +4,7 @@ Scraper neueroeffnung.info → JSON → Walidacja → Excel
 Kategorie (Excel): Markets, Restaurants, Drugstores, Shopping centers
 Analityka: Schedule, By region, Validation report, Skipped
 
-Pipeline: Scraping → JSON → Walidacja (+ retry) → Excel
+Pipeline: Scraping → JSON → Walidacja (+ retry) → Google Maps (Playwright) → Excel
 Kolumny Excel (EN): Company name | Address | Closing date | Opening date | Information | Entry type | Validation status | Missing fields
 """
 
@@ -481,6 +481,14 @@ def is_opening_date_in_range(data_otwarcia: str) -> bool:
     return range_start <= OPENING_FILTER_END and range_end >= OPENING_FILTER_START
 
 
+def is_opening_date_outside_filter(data_otwarcia: str) -> bool:
+    """True, gdy data jest odczytana i całkowicie poza Q3 2026 – Q4 2028."""
+    parsed = parse_opening_date_to_range(data_otwarcia)
+    if not parsed:
+        return False
+    return not is_opening_date_in_range(data_otwarcia)
+
+
 def filter_records_by_opening_date(
     records: list[Record],
     logger: logging.Logger,
@@ -496,6 +504,45 @@ def filter_records_by_opening_date(
                 record.data_otwarcia or "(brak daty)",
             )
     return filtered
+
+
+def purge_out_of_range_records(
+    sheets: dict[str, list[Record]],
+    skipped: list[SkippedRecord],
+    logger: logging.Logger,
+) -> dict[str, list[Record]]:
+    """
+    Twarda reguła: rekordy z datą otwarcia poza Q3 2026 – Q4 2028
+    nie trafiają do JSON, walidacji, Google Maps ani Excela — tylko do arkusza Skipped.
+    """
+    removed = 0
+    for category_name in DATA_SHEET_NAMES:
+        kept: list[Record] = []
+        for record in sheets.get(category_name, []):
+            if not is_opening_date_outside_filter(record.data_otwarcia):
+                kept.append(record)
+                continue
+            removed += 1
+            logger.info(
+                "  Odrzucono (twardy filtr dat): %s | %s | %s",
+                category_name,
+                record.nazwa_firmy,
+                record.data_otwarcia or "(brak/nieparsowalna data)",
+            )
+            skipped.append(
+                SkippedRecord(
+                    kategoria=category_name,
+                    nazwa_firmy=record.nazwa_firmy,
+                    adres=record.adres,
+                    data_otwarcia=record.data_otwarcia,
+                    typ_wpisu=record.typ_wpisu,
+                    powod=SKIP_REASON_OUT_OF_RANGE,
+                )
+            )
+        sheets[category_name] = kept
+    if removed:
+        logger.info("Twardy filtr dat: usunięto %s rekordów spoza zakresu.", removed)
+    return sheets
 
 
 def is_incomplete_address(adres: str) -> bool:
@@ -960,8 +1007,6 @@ def find_missing_fields(record: Record) -> list[str]:
         missing.append("address (incomplete)")
     if not clean_text_local(record.data_otwarcia):
         missing.append("opening date")
-    elif not is_opening_date_in_range(record.data_otwarcia):
-        missing.append("opening date (out of range)")
     if not clean_text_local(record.informacja):
         missing.append("information")
     return missing
@@ -1049,6 +1094,8 @@ def run_validation_pipeline(
         for category_name in DATA_SHEET_NAMES:
             for idx, record in enumerate(sheets.get(category_name, [])):
                 if record.status_walidacji != VALIDATION_STATUS_OK:
+                    if is_opening_date_outside_filter(record.data_otwarcia):
+                        continue
                     to_retry.append((category_name, idx))
         if not to_retry:
             logger.info("✅ Walidacja OK — wszystkie rekordy kompletne.")
@@ -1079,6 +1126,55 @@ def run_validation_pipeline(
         )
 
     return sheets, summary
+
+
+def run_maps_enrichment_pipeline(
+    sheets: dict[str, list[Record]],
+    logger: logging.Logger,
+) -> dict[str, list[Record]]:
+    """Uzupełnia niepełne adresy przez Google Maps (Playwright, headless)."""
+    from google_maps_enricher import (
+        GoogleMapsEnricher,
+        is_enrichment_enabled,
+        load_maps_cache,
+        save_maps_cache,
+    )
+
+    if not is_enrichment_enabled():
+        logger.info("Google Maps enrichment wyłączone (ENABLE_GOOGLE_MAPS_ENRICHMENT=false)")
+        return sheets
+
+    to_enrich: list[tuple[str, int]] = []
+    for category_name in DATA_SHEET_NAMES:
+        for idx, record in enumerate(sheets.get(category_name, [])):
+            if is_incomplete_address(record.adres):
+                to_enrich.append((category_name, idx))
+
+    if not to_enrich:
+        logger.info("Google Maps: brak rekordów z niepełnym adresem.")
+        return sheets
+
+    logger.info("--- Google Maps: uzupełnianie %s adresów ---", len(to_enrich))
+    maps_cache = load_maps_cache(logger)
+
+    try:
+        with GoogleMapsEnricher(logger, maps_cache) as enricher:
+            for category_name, idx in to_enrich:
+                record = sheets[category_name][idx]
+                partial = record.listing_adres_lista or record.adres
+                resolved = enricher.resolve_address(record.nazwa_firmy, partial)
+                if not resolved or is_incomplete_address(resolved):
+                    continue
+                context = f"{record.nazwa_firmy} | {partial}"
+                record.adres = validate_address(resolved, logger, context)
+                sheets[category_name][idx] = apply_validation_status(record)
+                logger.info("  ✓ Uzupełniono adres: %s → %s", record.nazwa_firmy, record.adres)
+    except Exception as exc:
+        logger.error("Google Maps enrichment przerwane: %s", exc)
+    finally:
+        save_maps_cache(maps_cache, logger)
+
+    return sheets
 
 
 def build_validation_report_rows(sheets: dict[str, list[Record]]) -> list[list]:
@@ -1301,11 +1397,27 @@ def run_scraper() -> None:
     cleaned_data = clean_all_sheets(data_only, logger)
     sheets.update(cleaned_data)
 
+    logger.info("--- Twardy filtr dat otwarcia ---")
+    sheets = purge_out_of_range_records(sheets, skipped, logger)
+
     logger.info("--- Zapis JSON (po scrapingu) ---")
     save_json_dataset(sheets, JSON_OUTPUT_FILE, logger, stage="po_scrapingu")
 
     logger.info("--- Walidacja i ponawianie pobrania ---")
     sheets, validation_summary = run_validation_pipeline(session, sheets, cache, logger)
+
+    logger.info("--- Twardy filtr dat otwarcia (po walidacji) ---")
+    sheets = purge_out_of_range_records(sheets, skipped, logger)
+    validation_summary = validate_all_records(sheets)
+
+    logger.info("--- Google Maps (Playwright, headless) ---")
+    sheets = run_maps_enrichment_pipeline(sheets, logger)
+    validation_summary = validate_all_records(sheets)
+    logger.info(
+        "Po Google Maps: OK=%s, wymaga weryfikacji=%s",
+        validation_summary["ok"],
+        validation_summary["wymaga_weryfikacji"],
+    )
 
     enrich_all_closing_dates(sheets)
 

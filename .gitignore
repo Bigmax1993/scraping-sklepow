@@ -9,6 +9,7 @@ env/
 
 # Dane wygenerowane przez scraper
 neueroeffnung_detail_cache.json
+neueroeffnung_maps_cache.json
 neueroeffnung_scraper.log
 neueroeffnung_wynik.json
 neueroeffnung_raport_brakow.json

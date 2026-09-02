@@ -135,8 +135,18 @@ Obsługiwane formaty: `03.09.2026`, `2. Halbjahr 2026`, `4. Quartal 2028`, `2027
 
 ## Uzupełnianie adresów
 
-- **Strona 1** listy — karty z linkiem → pełne dane od razu ze strony szczegółów
-- **Strona 2+** — tylko PLZ + miasto → wyszukiwanie przez `/suche/Nazwa+PLZ+Miasto` → pobranie pełnego adresu i opisu
+1. **Strona 1** listy — karty z linkiem → pełne dane od razu ze strony szczegółów
+2. **Strona 2+** — tylko PLZ + miasto → wyszukiwanie przez `/suche/Nazwa+PLZ+Miasto` → pobranie pełnego adresu i opisu
+3. **Google Maps (Playwright, headless)** — gdy po walidacji JSON adres nadal niepełny → wyszukiwanie `Nazwa + PLZ + Miasto` na mapach Google
+
+Zmienne środowiskowe:
+
+| Zmienna | Domyślnie | Opis |
+|---------|-----------|------|
+| `ENABLE_GOOGLE_MAPS_ENRICHMENT` | `true` | Włącza warstwę Google Maps |
+| `GOOGLE_MAPS_HEADLESS` | `true` | Przeglądarka w tle (bez okna) |
+
+Cache wyników Maps: `neueroeffnung_maps_cache.json` (nie jest usuwany przy każdym runie).
 
 ---
 
@@ -145,6 +155,7 @@ Obsługiwane formaty: `03.09.2026`, `2. Halbjahr 2026`, `4. Quartal 2028`, `2027
 | Plik | Rola |
 |------|------|
 | `neueroeffnung_detail_cache.json` | Cache stron szczegółów (adres, daty, informacja) |
+| `neueroeffnung_maps_cache.json` | Cache adresów z Google Maps |
 | `neueroeffnung_scraper.log` | Szczegółowy log |
 
 Przy problemach z brakującymi danymi usuń cache i uruchom ponownie:
@@ -167,8 +178,10 @@ Główne stałe w `neueroeffnung_scraper.py`:
 | `MAX_ADDRESS_LENGTH` | 650 | Maks. długość adresu |
 | `MAX_INFO_LENGTH` | 5000 | Maks. długość kolumny informacja |
 | `MAX_VALIDATION_RETRIES` | 2 | Liczba ponownych pobrań przy brakach |
-| `OPENING_FILTER_START` | 2026-07-01 | Początek filtra dat |
-| `OPENING_FILTER_END` | 2028-12-31 | Koniec filtra dat |
+| `OPENING_FILTER_START` | 2026-07-01 | Początek filtra dat (Q3 2026) |
+| `OPENING_FILTER_END` | 2028-12-31 | Koniec filtra dat (Q4 2028) |
+
+**Twarda reguła:** rekordy z datą otwarcia **poza** tym zakresem nie trafiają do JSON/Excel — lądują wyłącznie w arkuszu **Skipped** (również po walidacji, gdy retry zwróci datę spoza zakresu).
 
 ### Wysyłka e-mail (Gmail)
 

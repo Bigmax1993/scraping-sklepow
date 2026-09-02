@@ -61,3 +61,52 @@ class TestFilterRecordsByOpeningDate:
         assert len(filtered) == 2
         assert filtered[0].nazwa_firmy == "A"
         assert filtered[1].nazwa_firmy == "C"
+
+
+class TestPurgeOutOfRangeRecords:
+    def test_removes_out_of_range_from_sheets_and_adds_to_skipped(self, silent_logger):
+        sheets = {
+            "Markets": [
+                scraper.Record("OK", "Adres", "", "03.09.2026", kategoria="Markets"),
+                scraper.Record("Za późno", "Adres", "", "2029", kategoria="Markets"),
+            ],
+            "Restaurants": [],
+            "Drugstores": [],
+            "Shopping centers": [],
+        }
+        skipped: list[scraper.SkippedRecord] = []
+        result = scraper.purge_out_of_range_records(sheets, skipped, silent_logger)
+
+        assert len(result["Markets"]) == 1
+        assert result["Markets"][0].nazwa_firmy == "OK"
+        assert len(skipped) == 1
+        assert skipped[0].nazwa_firmy == "Za późno"
+        assert skipped[0].powod == scraper.SKIP_REASON_OUT_OF_RANGE
+
+    def test_keeps_unparseable_date_for_validation(self, silent_logger):
+        sheets = {
+            "Markets": [scraper.Record("Brak daty", "Adres", "", "", kategoria="Markets")],
+            "Restaurants": [],
+            "Drugstores": [],
+            "Shopping centers": [],
+        }
+        skipped: list[scraper.SkippedRecord] = []
+        result = scraper.purge_out_of_range_records(sheets, skipped, silent_logger)
+
+        assert len(result["Markets"]) == 1
+        assert skipped == []
+
+
+class TestIsOpeningDateOutsideFilter:
+    @pytest.mark.parametrize(
+        "text,outside",
+        [
+            ("2029", True),
+            ("1. Halbjahr 2026", True),
+            ("03.09.2026", False),
+            ("", False),
+            ("wkrótce", False),
+        ],
+    )
+    def test_detects_only_parseable_out_of_range_dates(self, text: str, outside: bool):
+        assert scraper.is_opening_date_outside_filter(text) is outside

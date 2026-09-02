@@ -119,3 +119,53 @@ class TestJsonDataset:
         assert len(rows) == 1
         assert rows[0][1] == "Brak opisu"
         assert rows[0][8] == 2
+
+
+class TestMapsEnrichmentPipeline:
+    def test_enriches_incomplete_address(self, silent_logger, monkeypatch):
+        monkeypatch.setenv("ENABLE_GOOGLE_MAPS_ENRICHMENT", "true")
+        incomplete = _sample_record(
+            nazwa_firmy="Lidl",
+            adres="32756 Detmold",
+            listing_adres_lista="32756 Detmold",
+            status_walidacji=scraper.VALIDATION_STATUS_NEEDS_REVIEW,
+            brakujace_pola="address (incomplete)",
+        )
+        sheets = {
+            "Markets": [incomplete],
+            "Restaurants": [],
+            "Drugstores": [],
+            "Shopping centers": [],
+        }
+
+        class FakeEnricher:
+            def __init__(self, *args, **kwargs):
+                pass
+
+            def __enter__(self):
+                return self
+
+            def __exit__(self, *args):
+                return False
+
+            def resolve_address(self, company_name, partial_address):
+                return "Hauptstraße 1, 32756 Detmold"
+
+        with patch("google_maps_enricher.GoogleMapsEnricher", FakeEnricher):
+            with patch("google_maps_enricher.load_maps_cache", return_value={}):
+                with patch("google_maps_enricher.save_maps_cache"):
+                    result = scraper.run_maps_enrichment_pipeline(sheets, silent_logger)
+
+        assert result["Markets"][0].adres == "Hauptstraße 1, 32756 Detmold"
+        assert result["Markets"][0].status_walidacji == scraper.VALIDATION_STATUS_OK
+
+    def test_skips_when_disabled(self, silent_logger, monkeypatch):
+        monkeypatch.setenv("ENABLE_GOOGLE_MAPS_ENRICHMENT", "false")
+        sheets = {
+            "Markets": [_sample_record(adres="80331 München", listing_adres_lista="80331 München")],
+            "Restaurants": [],
+            "Drugstores": [],
+            "Shopping centers": [],
+        }
+        result = scraper.run_maps_enrichment_pipeline(sheets, silent_logger)
+        assert result["Markets"][0].adres == "80331 München"

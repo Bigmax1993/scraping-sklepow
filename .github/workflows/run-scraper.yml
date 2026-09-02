@@ -23,13 +23,20 @@ jobs:
           python-version: "3.13"
 
       - name: Install dependencies
-        run: pip install -r requirements.txt
+        run: |
+          pip install -r requirements.txt
+          playwright install chromium --with-deps
 
       - name: Run tests
         run: python -m pytest tests/ -q
+        env:
+          ENABLE_GOOGLE_MAPS_ENRICHMENT: "false"
 
       - name: Run scraper
         run: python neueroeffnung_scraper.py
+        env:
+          ENABLE_GOOGLE_MAPS_ENRICHMENT: "true"
+          GOOGLE_MAPS_HEADLESS: "true"
 
       - name: Upload Excel artifact
         if: always()

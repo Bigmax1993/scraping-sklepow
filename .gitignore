@@ -1,0 +1,26 @@
+# Python
+__pycache__/
+*.py[cod]
+*.pyo
+.pytest_cache/
+.venv/
+venv/
+env/
+
+# Dane wygenerowane przez scraper
+neueroeffnung_detail_cache.json
+neueroeffnung_scraper.log
+neueroeffnung_wynik.json
+neueroeffnung_raport_brakow.json
+neueroeffnung_wynik.xlsx
+~$*.xlsx
+
+# Sekrety / env lokalne
+.env
+.env.*
+*.env
+
+# IDE
+.idea/
+.vscode/
+*.swp

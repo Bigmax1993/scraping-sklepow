@@ -1,0 +1,40 @@
+name: Run scraper
+
+on:
+  workflow_dispatch:
+
+jobs:
+  scrape:
+    runs-on: ubuntu-latest
+    timeout-minutes: 360
+    env:
+      GMAIL_USER: ${{ secrets.GMAIL_USER }}
+      GMAIL_APP_PASSWORD: ${{ secrets.GMAIL_APP_PASSWORD }}
+      SEND_EMAIL: "true"
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.13"
+
+      - name: Install dependencies
+        run: pip install -r requirements.txt
+
+      - name: Run tests
+        run: python -m pytest tests/ -q
+
+      - name: Run scraper
+        run: python neueroeffnung_scraper.py
+
+      - name: Upload Excel artifact
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: neueroeffnung-wynik
+          path: |
+            neueroeffnung_wynik.xlsx
+            neueroeffnung_wynik.json
+            neueroeffnung_raport_brakow.json
+            neueroeffnung_scraper.log
+          if-no-files-found: ignore

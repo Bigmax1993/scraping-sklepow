@@ -1,0 +1,121 @@
+"""Testy walidacji JSON, ponawiania pobrania i raportu braków."""
+
+from __future__ import annotations
+
+import json
+from unittest.mock import MagicMock, patch
+
+import pytest
+
+import neueroeffnung_scraper as scraper
+
+pytestmark = pytest.mark.unit
+
+
+def _sample_record(**overrides) -> scraper.Record:
+    base = scraper.Record(
+        nazwa_firmy="REWE Esch",
+        adres="Beckrather Straße 39, 41189 Mönchengladbach",
+        data_zamkniecia="",
+        data_otwarcia="03.09.2026",
+        informacja="Opis sklepu.",
+        typ_wpisu="Reopening",
+        kategoria="Markety",
+        detail_url="https://example.com/rewe",
+        listing_adres_lista="41189 Mönchengladbach",
+        entry_type_raw="reopening",
+    )
+    for key, value in overrides.items():
+        setattr(base, key, value)
+    return base
+
+
+class TestFindMissingFields:
+    def test_complete_record_has_no_missing_fields(self):
+        assert scraper.find_missing_fields(_sample_record()) == []
+
+    def test_detects_incomplete_address(self):
+        missing = scraper.find_missing_fields(_sample_record(adres="80331 München"))
+        assert "adres (niepełny)" in missing
+
+    def test_detects_missing_information(self):
+        missing = scraper.find_missing_fields(_sample_record(informacja=""))
+        assert "informacja" in missing
+
+
+class TestValidationPipeline:
+    def test_marks_incomplete_records_for_review(self):
+        sheets = {
+            "Markety": [_sample_record(informacja="")],
+            "Restauracje": [],
+            "Drogerie": [],
+            "Centra handlowe": [],
+        }
+        summary = scraper.validate_all_records(sheets)
+        assert summary["wymaga_weryfikacji"] == 1
+        assert sheets["Markety"][0].status_walidacji == scraper.VALIDATION_STATUS_NEEDS_REVIEW
+
+    def test_retry_refreshes_record_from_listing(self, silent_logger, tmp_path):
+        record = _sample_record(informacja="", status_walidacji=scraper.VALIDATION_STATUS_NEEDS_REVIEW)
+        refreshed = _sample_record(informacja="Uzupełniony opis.")
+
+        with patch.object(scraper, "listing_to_record", return_value=refreshed) as mock_listing:
+            result = scraper.retry_record(MagicMock(), record, {}, silent_logger)
+
+        mock_listing.assert_called_once()
+        assert result.informacja == "Uzupełniony opis."
+        assert result.proby_ponowienia == 1
+        assert result.status_walidacji == scraper.VALIDATION_STATUS_OK
+
+    def test_run_validation_pipeline_retries_then_marks_remaining(
+        self, silent_logger, tmp_path
+    ):
+        incomplete = _sample_record(informacja="")
+        sheets = {
+            "Markety": [incomplete],
+            "Restauracje": [],
+            "Drogerie": [],
+            "Centra handlowe": [],
+        }
+
+        with patch.object(
+            scraper,
+            "retry_record",
+            side_effect=lambda *_args, **_kwargs: _sample_record(informacja=""),
+        ):
+            _, summary = scraper.run_validation_pipeline(MagicMock(), sheets, {}, silent_logger)
+
+        assert summary["wymaga_weryfikacji"] == 1
+        assert sheets["Markety"][0].status_walidacji == scraper.VALIDATION_STATUS_NEEDS_REVIEW
+
+
+class TestJsonDataset:
+    def test_save_and_load_json_roundtrip(self, silent_logger, tmp_path):
+        path = tmp_path / "dataset.json"
+        sheets = {
+            "Markety": [_sample_record()],
+            "Restauracje": [],
+            "Drogerie": [],
+            "Centra handlowe": [],
+        }
+        scraper.save_json_dataset(sheets, path, silent_logger, stage="test")
+        loaded = scraper.load_json_dataset(path, silent_logger)
+        assert loaded["Markety"][0].nazwa_firmy == "REWE Esch"
+        payload = json.loads(path.read_text(encoding="utf-8"))
+        assert payload["stage"] == "test"
+
+    def test_build_validation_report_rows_only_incomplete(self):
+        sheets = {
+            "Markety": [
+                _sample_record(),
+                _sample_record(nazwa_firmy="Brak opisu", informacja="", proby_ponowienia=2),
+            ],
+            "Restauracje": [],
+            "Drogerie": [],
+            "Centra handlowe": [],
+        }
+        scraper.validate_all_records(sheets)
+        rows = scraper.build_validation_report_rows(sheets)
+        assert len(rows) == 1
+        assert rows[0][1] == "Brak opisu"
+        assert rows[0][8] == 2

@@ -103,7 +103,7 @@ class TestRegressionRecordShape:
     def test_excel_column_order_unchanged(self, silent_logger, tmp_path):
         output_path = tmp_path / "regression.xlsx"
         scraper.write_excel(
-            {"Markety": [scraper.Record("A", "B", "C", "D")]},
+            {"Markets": [scraper.Record("A", "B", "C", "D")]},
             [],
             output_path,
             silent_logger,
@@ -111,7 +111,7 @@ class TestRegressionRecordShape:
         from openpyxl import load_workbook
 
         wb = load_workbook(output_path)
-        ws = wb["Markety"]
+        ws = wb["Markets"]
         assert [ws.cell(row=1, column=i).value for i in range(1, 9)] == list(
             scraper.EXCEL_COLUMNS
         )

@@ -31,7 +31,7 @@ class Record:               # wiersz w Excelu / JSON
     detail_url: str = ""            # URL strony szczegółów (do retry)
     listing_adres_lista: str = ""   # oryginalny adres z listy
     entry_type_raw: str = ""        # surowy entry_type
-    status_walidacji: str = "OK"    # OK | Wymaga weryfikacji
+    status_walidacji: str = "OK"    # OK | Needs review
     brakujace_pola: str = ""        # np. "informacja, adres (niepełny)"
     proby_ponowienia: int = 0
 
@@ -102,10 +102,10 @@ Paginacja: `<link rel="next">` w `<head>`.
 
 ```python
 CATEGORIES = {
-    "Markety":           "/branche/supermaerkte",
-    "Restauracje":       "/branche/gastronomie",
-    "Drogerie":          "/branche/drogerie",
-    "Centra handlowe":   "/branche/einkaufszentrum",
+    "Markets":           "/branche/supermaerkte",
+    "Restaurants":       "/branche/gastronomie",
+    "Drugstores":        "/branche/drogerie",
+    "Shopping centers":  "/branche/einkaufszentrum",
 }
 ```
 
@@ -161,11 +161,11 @@ Tylko rekordy ze statusem `Wymaga weryfikacji`.
 
 | # | Arkusz | Kolumny |
 |---|--------|---------|
-| 1–4 | Markety … Centra handlowe | `EXCEL_COLUMNS` (8 kolumn) |
-| 5 | Harmonogram | `HARMONOGRAM_COLUMNS` |
-| 6 | Według regionu | `REGION_COLUMNS` |
-| 7 | Raport braków | `VALIDATION_REPORT_COLUMNS` |
-| 8 | Pominięte | `SKIPPED_COLUMNS` |
+| 1–4 | Markets … Shopping centers | `EXCEL_COLUMNS` (8 columns) |
+| 5 | Schedule | `HARMONOGRAM_COLUMNS` |
+| 6 | By region | `REGION_COLUMNS` |
+| 7 | Validation report | `VALIDATION_REPORT_COLUMNS` |
+| 8 | Skipped | `SKIPPED_COLUMNS` |
 
 ### Region — `plz_to_bundesland()`
 

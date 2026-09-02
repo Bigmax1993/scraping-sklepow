@@ -66,36 +66,36 @@ Każde uruchomienie **nadpisuje** pliki wynikowe od zera — dane nie są dopisy
 
 ## Plik Excel — 8 arkuszy
 
-### Arkusze danych (4 kategorie)
+### Data sheets (4 categories)
 
-| Arkusz | Źródło |
+| Sheet | Source |
 |--------|--------|
-| **Markety** | `/branche/supermaerkte` |
-| **Restauracje** | `/branche/gastronomie` |
-| **Drogerie** | `/branche/drogerie` |
-| **Centra handlowe** | `/branche/einkaufszentrum` |
+| **Markets** | `/branche/supermaerkte` |
+| **Restaurants** | `/branche/gastronomie` |
+| **Drugstores** | `/branche/drogerie` |
+| **Shopping centers** | `/branche/einkaufszentrum` |
 
-### Arkusze analityczne i kontrolne (4)
+### Analytical and control sheets (4)
 
-| Arkusz | Opis |
-|--------|------|
-| **Harmonogram** | Wszystkie sklepy posortowane chronologicznie po dacie otwarcia (z datą zamknięcia) |
-| **Według regionu** | Bundesland, PLZ, miasto + dane sklepu (w tym data zamknięcia) |
-| **Raport braków** | Rekordy ze statusem „Wymaga weryfikacji” (w tym data zamknięcia) |
-| **Pominięte** | Wpisy odrzucone (data poza zakresem) + oznaczone walidacją |
+| Sheet | Description |
+|--------|-------------|
+| **Schedule** | All stores sorted by opening date (incl. closing date) |
+| **By region** | Bundesland, postal code, city + store data |
+| **Validation report** | Records with status „Needs review” |
+| **Skipped** | Rejected entries (date out of range) + validation flags |
 
-### Kolumny arkuszy danych
+### Data sheet columns (English)
 
-| Kolumna | Opis |
-|---------|------|
-| Nazwa firmy | Nazwa sklepu / lokalu |
-| Adres | Pełny adres (ulica, PLZ, miasto) — max 650 znaków |
-| data zamknięcia | Data zamknięcia przed remontem — wyciągana z opisu *(opcjonalna)* |
-| data otwarcia | Planowana data otwarcia |
-| informacja | Pełny opis ze strony szczegółów — max 5000 znaków |
-| Typ wpisu | `Neueröffnung` lub `Reopening` |
-| Status walidacji | `OK` lub `Wymaga weryfikacji` |
-| Brakujące pola | Np. `informacja`, `adres (niepełny)` |
+| Column | Description |
+|--------|-------------|
+| Company name | Store / venue name |
+| Address | Full address (street, postal code, city) — max 650 chars |
+| Closing date | Closing date before renovation — from description *(optional)* |
+| Opening date | Planned opening date |
+| Information | Full description from detail page — max 5000 chars |
+| Entry type | `Neueröffnung` or `Reopening` |
+| Validation status | `OK` or `Needs review` |
+| Missing fields | E.g. `information`, `address (incomplete)` |
 
 ---
 
@@ -117,7 +117,7 @@ Każde uruchomienie **nadpisuje** pliki wynikowe od zera — dane nie są dopisy
 1. Zapisuje dane do JSON
 2. Sprawdza każdy rekord (`find_missing_fields`)
 3. Dla rekordów z brakami — **czyści cache** i ponawia pobranie strony szczegółów (domyślnie **2 próby**)
-4. Rekordy nadal niekompletne → status `Wymaga weryfikacji` + wpis w **Raport braków**
+4. Rekordy nadal niekompletne → status `Needs review` + wpis w **Validation report**
 5. Dopiero potem zapisuje Excel
 
 ---
@@ -269,7 +269,7 @@ Automatyczny scraping sklepow/
 |---------|-------------|
 | Pusty adres na stronie 2+ | Scraper szuka przez `/suche/` — sprawdź log |
 | Pusta data zamknięcia | Normalne — pole opcjonalne |
-| Status „Wymaga weryfikacji” | Zobacz arkusz **Raport braków** lub `neueroeffnung_raport_brakow.json` |
+| Status „Needs review” | Zobacz arkusz **Validation report** lub `neueroeffnung_raport_brakow.json` |
 | Brak kolumny informacja | Usuń `neueroeffnung_detail_cache.json` i uruchom ponownie |
 | Scraper trwa bardzo długo | Normalne przy pełnym skanie 4 kategorii × 30 stron + walidacja z ponowieniami |
 | Zbyt długi czas / blokada IP | Zwiększ `REQUEST_DELAY_SEC` w skrypcie |

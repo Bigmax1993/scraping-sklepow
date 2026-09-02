@@ -93,13 +93,13 @@ class TestDerivedSheets:
 
     def test_build_harmonogram_sorts_by_date(self):
         sheets = {
-            "Markety": [
+            "Markets": [
                 scraper.Record("B", "Adres B", "", "2027", typ_wpisu="Neueröffnung"),
                 scraper.Record("A", "Adres A", "", "03.09.2026", typ_wpisu="Reopening"),
             ],
-            "Restauracje": [],
-            "Drogerie": [],
-            "Centra handlowe": [],
+            "Restaurants": [],
+            "Drugstores": [],
+            "Shopping centers": [],
         }
         rows = scraper.build_harmonogram_rows(sheets)
         assert rows[0][1] == "A"

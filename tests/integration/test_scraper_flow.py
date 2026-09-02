@@ -81,25 +81,25 @@ class TestWriteExcelIntegration:
         output_path = tmp_path / "wynik.xlsx"
         long_adres = "A" * scraper.MAX_ADDRESS_LENGTH
         sheets = {
-            "Markety": [
+            "Markets": [
                 scraper.Record("REWE Esch", "Beckrather Straße 39, 41189 Mönchengladbach", "", "03.09.2026"),
             ],
-            "Restauracje": [
+            "Restaurants": [
                 scraper.Record("McDonald's", long_adres, "01.08.2026", "15.10.2026"),
             ],
-            "Drogerie": [],
-            "Centra handlowe": [],
+            "Drugstores": [],
+            "Shopping centers": [],
         }
 
         scraper.write_excel(sheets, [], output_path, silent_logger)
 
         wb = load_workbook(output_path)
-        assert "Harmonogram" in wb.sheetnames
-        assert "Według regionu" in wb.sheetnames
-        assert "Raport braków" in wb.sheetnames
-        assert "Pominięte" in wb.sheetnames
-        assert wb["Restauracje"]["B2"].value == long_adres
-        assert len(wb["Restauracje"]["B2"].value) == 650
+        assert scraper.SHEET_SCHEDULE in wb.sheetnames
+        assert scraper.SHEET_BY_REGION in wb.sheetnames
+        assert scraper.SHEET_VALIDATION_REPORT in wb.sheetnames
+        assert scraper.SHEET_SKIPPED in wb.sheetnames
+        assert wb["Restaurants"]["B2"].value == long_adres
+        assert len(wb["Restaurants"]["B2"].value) == 650
 
 
 class TestFetchDetailUsesCache:
@@ -174,9 +174,9 @@ class TestRunScraperEndToEnd:
                 mock_mail.assert_called_once()
 
         wb = load_workbook(tmp_path / "out.xlsx")
-        assert wb["Markety"].max_row >= 2
-        for row in range(2, wb["Markety"].max_row + 1):
-            data_otwarcia = wb["Markety"][f"D{row}"].value
+        assert wb["Markets"].max_row >= 2
+        for row in range(2, wb["Markets"].max_row + 1):
+            data_otwarcia = wb["Markets"][f"D{row}"].value
             assert scraper.is_opening_date_in_range(str(data_otwarcia))
 
 

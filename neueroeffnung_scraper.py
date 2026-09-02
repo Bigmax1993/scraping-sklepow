@@ -1,11 +1,11 @@
 """
 Scraper neueroeffnung.info → JSON → Walidacja → Excel
 
-Kategorie: Markety, Restauracje, Drogerie, Centra handlowe
-Analityka: Harmonogram, Według regionu, Raport braków, Pominięte
+Kategorie (Excel): Markets, Restaurants, Drugstores, Shopping centers
+Analityka: Schedule, By region, Validation report, Skipped
 
 Pipeline: Scraping → JSON → Walidacja (+ retry) → Excel
-Kolumny: Nazwa firmy | Adres | data zamknięcia | data otwarcia | informacja | Typ wpisu | Status walidacji | Brakujące pola
+Kolumny Excel (EN): Company name | Address | Closing date | Opening date | Information | Entry type | Validation status | Missing fields
 """
 
 from __future__ import annotations
@@ -45,8 +45,13 @@ TIMEOUT_SEC = 30
 MAX_VALIDATION_RETRIES = 2
 
 VALIDATION_STATUS_OK = "OK"
-VALIDATION_STATUS_NEEDS_REVIEW = "Wymaga weryfikacji"
+VALIDATION_STATUS_NEEDS_REVIEW = "Needs review"
 
+SHEET_SCHEDULE = "Schedule"
+SHEET_BY_REGION = "By region"
+SHEET_VALIDATION_REPORT = "Validation report"
+SHEET_SKIPPED = "Skipped"
+SKIP_REASON_OUT_OF_RANGE = "Opening date outside Q3 2026 – Q4 2028"
 
 HEADERS = {
     "User-Agent": (
@@ -57,67 +62,67 @@ HEADERS = {
 }
 
 CATEGORIES = {
-    "Markety": f"{BASE_URL}/branche/supermaerkte",
-    "Restauracje": f"{BASE_URL}/branche/gastronomie",
-    "Drogerie": f"{BASE_URL}/branche/drogerie",
-    "Centra handlowe": f"{BASE_URL}/branche/einkaufszentrum",
+    "Markets": f"{BASE_URL}/branche/supermaerkte",
+    "Restaurants": f"{BASE_URL}/branche/gastronomie",
+    "Drugstores": f"{BASE_URL}/branche/drogerie",
+    "Shopping centers": f"{BASE_URL}/branche/einkaufszentrum",
 }
 
 DATA_SHEET_NAMES = (
-    "Markety",
-    "Restauracje",
-    "Drogerie",
-    "Centra handlowe",
+    "Markets",
+    "Restaurants",
+    "Drugstores",
+    "Shopping centers",
 )
 
 EXCEL_COLUMNS = (
-    "Nazwa firmy",
-    "Adres",
-    "data zamknięcia",
-    "data otwarcia",
-    "informacja",
-    "Typ wpisu",
-    "Status walidacji",
-    "Brakujące pola",
+    "Company name",
+    "Address",
+    "Closing date",
+    "Opening date",
+    "Information",
+    "Entry type",
+    "Validation status",
+    "Missing fields",
 )
 VALIDATION_REPORT_COLUMNS = (
-    "Kategoria",
-    "Nazwa firmy",
-    "Adres",
-    "data zamknięcia",
-    "data otwarcia",
-    "Typ wpisu",
-    "Status walidacji",
-    "Brakujące pola",
-    "Próby ponowienia",
+    "Category",
+    "Company name",
+    "Address",
+    "Closing date",
+    "Opening date",
+    "Entry type",
+    "Validation status",
+    "Missing fields",
+    "Retry attempts",
 )
 HARMONOGRAM_COLUMNS = (
-    "Kategoria",
-    "Nazwa firmy",
-    "Adres",
-    "data zamknięcia",
-    "data otwarcia",
-    "Typ wpisu",
-    "informacja",
+    "Category",
+    "Company name",
+    "Address",
+    "Closing date",
+    "Opening date",
+    "Entry type",
+    "Information",
 )
 REGION_COLUMNS = (
     "Bundesland",
-    "PLZ",
-    "Miasto",
-    "Kategoria",
-    "Nazwa firmy",
-    "Adres",
-    "data zamknięcia",
-    "data otwarcia",
-    "Typ wpisu",
+    "Postal code",
+    "City",
+    "Category",
+    "Company name",
+    "Address",
+    "Closing date",
+    "Opening date",
+    "Entry type",
 )
 SKIPPED_COLUMNS = (
-    "Kategoria",
-    "Nazwa firmy",
-    "Adres",
-    "data otwarcia",
-    "Typ wpisu",
-    "Powód",
+    "Category",
+    "Company name",
+    "Address",
+    "Opening date",
+    "Entry type",
+    "Reason",
 )
 
 ENTRY_TYPE_LABELS = {
@@ -888,7 +893,7 @@ def collect_category_records(
                             adres=record.adres,
                             data_otwarcia=record.data_otwarcia,
                             typ_wpisu=record.typ_wpisu,
-                            powod="Data poza zakresem Q3 2026 – Q4 2028",
+                            powod=SKIP_REASON_OUT_OF_RANGE,
                         )
                     )
                 continue
@@ -948,17 +953,17 @@ def find_missing_fields(record: Record) -> list[str]:
     """Zwraca listę brakujących/niepełnych pól w rekordzie."""
     missing: list[str] = []
     if not clean_text_local(record.nazwa_firmy):
-        missing.append("nazwa_firmy")
+        missing.append("company name")
     if not clean_text_local(record.adres):
-        missing.append("adres")
+        missing.append("address")
     elif is_incomplete_address(record.adres):
-        missing.append("adres (niepełny)")
+        missing.append("address (incomplete)")
     if not clean_text_local(record.data_otwarcia):
-        missing.append("data_otwarcia")
+        missing.append("opening date")
     elif not is_opening_date_in_range(record.data_otwarcia):
-        missing.append("data_otwarcia (poza zakresem)")
+        missing.append("opening date (out of range)")
     if not clean_text_local(record.informacja):
-        missing.append("informacja")
+        missing.append("information")
     return missing
 
 
@@ -1157,7 +1162,7 @@ def collect_verification_skipped(
                         adres=record.adres,
                         data_otwarcia=record.data_otwarcia,
                         typ_wpisu=record.typ_wpisu,
-                        powod=record.brakujace_pola or "Wymaga weryfikacji",
+                        powod=record.brakujace_pola or VALIDATION_STATUS_NEEDS_REVIEW,
                     )
                 )
     return flagged
@@ -1229,13 +1234,13 @@ def write_excel(
             )
         )
 
-    sheet_plan.append(("Harmonogram", HARMONOGRAM_COLUMNS, build_harmonogram_rows(sheets)))
-    sheet_plan.append(("Według regionu", REGION_COLUMNS, build_region_rows(sheets)))
+    sheet_plan.append((SHEET_SCHEDULE, HARMONOGRAM_COLUMNS, build_harmonogram_rows(sheets)))
+    sheet_plan.append((SHEET_BY_REGION, REGION_COLUMNS, build_region_rows(sheets)))
     validation_rows = build_validation_report_rows(sheets)
-    sheet_plan.append(("Raport braków", VALIDATION_REPORT_COLUMNS, validation_rows))
+    sheet_plan.append((SHEET_VALIDATION_REPORT, VALIDATION_REPORT_COLUMNS, validation_rows))
     sheet_plan.append(
         (
-            "Pominięte",
+            SHEET_SKIPPED,
             SKIPPED_COLUMNS,
             [
                 [
@@ -1336,10 +1341,10 @@ def run_scraper() -> None:
 
     for name in DATA_SHEET_NAMES:
         logger.info("Arkusz '%s': %s rekordów", name, len(sheets.get(name, [])))
-    logger.info("Arkusz 'Harmonogram': %s rekordów", len(build_harmonogram_rows(sheets)))
-    logger.info("Arkusz 'Według regionu': %s rekordów", len(build_region_rows(sheets)))
-    logger.info("Arkusz 'Raport braków': %s rekordów", len(build_validation_report_rows(sheets)))
-    logger.info("Arkusz 'Pominięte': %s rekordów", len(skipped))
+    logger.info("Sheet '%s': %s records", SHEET_SCHEDULE, len(build_harmonogram_rows(sheets)))
+    logger.info("Sheet '%s': %s records", SHEET_BY_REGION, len(build_region_rows(sheets)))
+    logger.info("Sheet '%s': %s records", SHEET_VALIDATION_REPORT, len(build_validation_report_rows(sheets)))
+    logger.info("Sheet '%s': %s records", SHEET_SKIPPED, len(skipped))
     logger.info(
         "Walidacja końcowa: OK=%s / %s",
         validation_summary["ok"],

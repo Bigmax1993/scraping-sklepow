@@ -55,20 +55,20 @@
     "opening_filter_start": "2026-07-01",
     "opening_filter_end": "2028-12-31",
     "excel_columns": [
-      "Nazwa firmy",
-      "Adres",
-      "data zamknięcia",
-      "data otwarcia",
-      "informacja",
-      "Typ wpisu",
-      "Status walidacji",
-      "Brakujące pola"
+      "Company name",
+      "Address",
+      "Closing date",
+      "Opening date",
+      "Information",
+      "Entry type",
+      "Validation status",
+      "Missing fields"
     ],
     "data_sheet_names": [
-      "Markety",
-      "Restauracje",
-      "Drogerie",
-      "Centra handlowe"
+      "Markets",
+      "Restaurants",
+      "Drugstores",
+      "Shopping centers"
     ]
   },
   "opening_date_samples": {

@@ -148,8 +148,8 @@ def build_message(
     )
     msg.set_content(
         "W załączniku znajduje się gotowy plik Excel ze scrapingu neueroeffnung.info.\n"
-        "Arkusze: Markety, Restauracje, Drogerie, Centra handlowe, Harmonogram, "
-        "Według regionu, Raport braków, Pominięte.\n"
+        "Sheets: Markets, Restaurants, Drugstores, Shopping centers, Schedule, "
+        "By region, Validation report, Skipped.\n"
     )
     msg.add_attachment(
         xlsx.read_bytes(),

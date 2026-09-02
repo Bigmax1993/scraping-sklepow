@@ -20,7 +20,7 @@ def _sample_record(**overrides) -> scraper.Record:
         data_otwarcia="03.09.2026",
         informacja="Opis sklepu.",
         typ_wpisu="Reopening",
-        kategoria="Markety",
+        kategoria="Markets",
         detail_url="https://example.com/rewe",
         listing_adres_lista="41189 Mönchengladbach",
         entry_type_raw="reopening",
@@ -36,24 +36,24 @@ class TestFindMissingFields:
 
     def test_detects_incomplete_address(self):
         missing = scraper.find_missing_fields(_sample_record(adres="80331 München"))
-        assert "adres (niepełny)" in missing
+        assert "address (incomplete)" in missing
 
     def test_detects_missing_information(self):
         missing = scraper.find_missing_fields(_sample_record(informacja=""))
-        assert "informacja" in missing
+        assert "information" in missing
 
 
 class TestValidationPipeline:
     def test_marks_incomplete_records_for_review(self):
         sheets = {
-            "Markety": [_sample_record(informacja="")],
-            "Restauracje": [],
-            "Drogerie": [],
-            "Centra handlowe": [],
+            "Markets": [_sample_record(informacja="")],
+            "Restaurants": [],
+            "Drugstores": [],
+            "Shopping centers": [],
         }
         summary = scraper.validate_all_records(sheets)
         assert summary["wymaga_weryfikacji"] == 1
-        assert sheets["Markety"][0].status_walidacji == scraper.VALIDATION_STATUS_NEEDS_REVIEW
+        assert sheets["Markets"][0].status_walidacji == scraper.VALIDATION_STATUS_NEEDS_REVIEW
 
     def test_retry_refreshes_record_from_listing(self, silent_logger, tmp_path):
         record = _sample_record(informacja="", status_walidacji=scraper.VALIDATION_STATUS_NEEDS_REVIEW)
@@ -72,10 +72,10 @@ class TestValidationPipeline:
     ):
         incomplete = _sample_record(informacja="")
         sheets = {
-            "Markety": [incomplete],
-            "Restauracje": [],
-            "Drogerie": [],
-            "Centra handlowe": [],
+            "Markets": [incomplete],
+            "Restaurants": [],
+            "Drugstores": [],
+            "Shopping centers": [],
         }
 
         with patch.object(
@@ -86,33 +86,33 @@ class TestValidationPipeline:
             _, summary = scraper.run_validation_pipeline(MagicMock(), sheets, {}, silent_logger)
 
         assert summary["wymaga_weryfikacji"] == 1
-        assert sheets["Markety"][0].status_walidacji == scraper.VALIDATION_STATUS_NEEDS_REVIEW
+        assert sheets["Markets"][0].status_walidacji == scraper.VALIDATION_STATUS_NEEDS_REVIEW
 
 
 class TestJsonDataset:
     def test_save_and_load_json_roundtrip(self, silent_logger, tmp_path):
         path = tmp_path / "dataset.json"
         sheets = {
-            "Markety": [_sample_record()],
-            "Restauracje": [],
-            "Drogerie": [],
-            "Centra handlowe": [],
+            "Markets": [_sample_record()],
+            "Restaurants": [],
+            "Drugstores": [],
+            "Shopping centers": [],
         }
         scraper.save_json_dataset(sheets, path, silent_logger, stage="test")
         loaded = scraper.load_json_dataset(path, silent_logger)
-        assert loaded["Markety"][0].nazwa_firmy == "REWE Esch"
+        assert loaded["Markets"][0].nazwa_firmy == "REWE Esch"
         payload = json.loads(path.read_text(encoding="utf-8"))
         assert payload["stage"] == "test"
 
     def test_build_validation_report_rows_only_incomplete(self):
         sheets = {
-            "Markety": [
+            "Markets": [
                 _sample_record(),
                 _sample_record(nazwa_firmy="Brak opisu", informacja="", proby_ponowienia=2),
             ],
-            "Restauracje": [],
-            "Drogerie": [],
-            "Centra handlowe": [],
+            "Restaurants": [],
+            "Drugstores": [],
+            "Shopping centers": [],
         }
         scraper.validate_all_records(sheets)
         rows = scraper.build_validation_report_rows(sheets)

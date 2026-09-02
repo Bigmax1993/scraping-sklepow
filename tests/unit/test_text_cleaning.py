@@ -38,14 +38,14 @@ class TestCleanRecords:
 
     def test_clean_all_sheets_processes_every_category(self, silent_logger):
         sheets = {
-            "Markety": [scraper.Record("REWE", "Stra&szlig;e 1", "", "2026")],
-            "Restauracje": [scraper.Record("Caf&eacute;", "Berlin", "", "2026")],
-            "Drogerie": [],
-            "Centra handlowe": [],
+            "Markets": [scraper.Record("REWE", "Stra&szlig;e 1", "", "2026")],
+            "Restaurants": [scraper.Record("Caf&eacute;", "Berlin", "", "2026")],
+            "Drugstores": [],
+            "Shopping centers": [],
         }
 
         result = scraper.clean_all_sheets(sheets, silent_logger)
 
-        assert result["Markety"][0].nazwa_firmy == "REWE"
-        assert result["Restauracje"][0].nazwa_firmy == "Café"
-        assert result["Drogerie"] == []
+        assert result["Markets"][0].nazwa_firmy == "REWE"
+        assert result["Restaurants"][0].nazwa_firmy == "Café"
+        assert result["Drugstores"] == []

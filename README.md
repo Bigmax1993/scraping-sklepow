@@ -206,7 +206,14 @@ Repozytorium: [github.com/Bigmax1993/scraping-sklepow](https://github.com/Bigmax
 | `GMAIL_USER` | Konto Gmail (nadawca) |
 | `GMAIL_APP_PASSWORD` | Hasło do aplikacji Gmail |
 
-Secrets są używane przez workflow **Run scraper** (uruchomienie ręczne: Actions → Run scraper → Run workflow). Pliki wynikowe trafiają też do artifactów GitHub Actions.
+Secrets są używane przez workflow **Run scraper**.
+
+| Uruchomienie | Kiedy |
+|--------------|--------|
+| **Automatycznie** | Każda **niedziela o 23:30** (czas polski, CEST) |
+| **Ręcznie** | Actions → Run scraper → Run workflow |
+
+Pliki wynikowe trafiają też do artifactów GitHub Actions.
 
 Lokalnie **nie commituj** haseł — trzymaj je w zmiennych Windows lub GitHub Secrets.
 

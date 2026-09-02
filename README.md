@@ -1,6 +1,6 @@
-# Automatyczny scraping sklepów — neueroeffnung.info
+# Automatyczny scraping sklepów 
 
-Scraper pobierający dane o planowanych otwarciach sklepów, restauracji, drogerii i centrów handlowych z serwisu [neueroeffnung.info](https://www.neueroeffnung.info). Dane przechodzą przez pipeline **Scraping → JSON → Walidacja → Excel → E-mail**.
+Scraper pobierający dane o planowanych otwarciach sklepów, restauracji, drogerii i centrów handlowych  Dane przechodzą przez pipeline **Scraping → JSON → Walidacja → Excel → E-mail**.
 
 ## Szybki start
 

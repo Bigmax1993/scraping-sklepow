@@ -4,10 +4,16 @@ on:
   workflow_dispatch:
   schedule:
     # Niedziela 12:00 czasu polskiego (CEST) = 10:00 UTC
+    # Aktywne od PIPELINE_START_DATE (2026-09-03)
     - cron: "0 10 * * 0"
 
 jobs:
+  gate:
+    uses: ./.github/workflows/pipeline-gate.yml
+
   finalize:
+    needs: gate
+    if: needs.gate.outputs.skip != 'true'
     runs-on: ubuntu-latest
     timeout-minutes: 240
     env:

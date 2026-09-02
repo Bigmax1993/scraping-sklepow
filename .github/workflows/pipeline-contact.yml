@@ -3,13 +3,18 @@ name: Pipeline — Contact
 on:
   workflow_dispatch:
   schedule:
-    # Sobota 02:00 PL (CEST) = 00:00 UTC
+    # Sobota 02:00 PL (CEST) = 00:00 UTC — od PIPELINE_START_DATE (2026-09-03)
     - cron: "0 0 * * 6"
     # Sobota 18:00 PL (CEST) = 16:00 UTC
     - cron: "0 16 * * 6"
 
 jobs:
+  gate:
+    uses: ./.github/workflows/pipeline-gate.yml
+
   contact:
+    needs: gate
+    if: needs.gate.outputs.skip != 'true'
     runs-on: ubuntu-latest
     timeout-minutes: 240
     env:

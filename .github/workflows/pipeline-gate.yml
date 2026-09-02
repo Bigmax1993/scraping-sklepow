@@ -1,0 +1,21 @@
+# Reusable: bramka daty startu pipeline (jednorazowo od 2026-09-03)
+
+on:
+  workflow_call:
+    outputs:
+      skip:
+        description: "true = pomiń główny job (przed datą startu)"
+        value: ${{ jobs.gate.outputs.skip }}
+
+jobs:
+  gate:
+    runs-on: ubuntu-latest
+    outputs:
+      skip: ${{ steps.gate.outputs.skip }}
+    env:
+      PIPELINE_START_DATE: "2026-09-03"
+    steps:
+      - uses: actions/checkout@v4
+      - name: Sprawdź datę startu pipeline
+        id: gate
+        run: bash .github/scripts/pipeline_start_gate.sh

@@ -4,10 +4,16 @@ on:
   workflow_dispatch:
   schedule:
     # Pon–Pt 03:30 czasu polskiego (CEST, UTC+2) = 01:30 UTC
+    # Pierwszy automatyczny run: 2026-09-03 03:30 PL (bramka PIPELINE_START_DATE)
     - cron: "30 1 * * 1-5"
 
 jobs:
+  gate:
+    uses: ./.github/workflows/pipeline-gate.yml
+
   discovery:
+    needs: gate
+    if: needs.gate.outputs.skip != 'true'
     runs-on: ubuntu-latest
     timeout-minutes: 240
     env:

@@ -1,0 +1,34 @@
+---
+description: Jednorazowy start pipeline od 2026-09-03 — Discovery, potem harmonogram tygodniowy
+globs: .github/workflows/pipeline-*.yml
+alwaysApply: false
+---
+
+# Start pipeline: 2026-09-03
+
+## Jednorazowa reguła kickoff
+
+**Pierwszy automatyczny run produkcyjnego pipeline'u:** **2026-09-03 (czwartek) o 03:30 PL** — segment **Discovery**.
+
+Do tej daty **żaden cron** segmentów nie uruchamia pracy (job kończy się od razu z notice).  
+**workflow_dispatch** nadal działa (ręczne testy).
+
+Od **2026-09-03** obowiązuje stały harmonogram:
+
+| Segment | Harmonogram |
+|---------|-------------|
+| Discovery | Pn–Pt 03:30 |
+| Validate | Codziennie 08:30 |
+| Maps | Pn–Pt 22:00 |
+| Contact | Sob 02:00 + 18:00 |
+| Finalize | Nd 12:00 |
+
+## Implementacja
+
+- `PIPELINE_START_DATE=2026-09-03` w `.github/scripts/pipeline_start_gate.sh`
+- Każdy `pipeline-*.yml` wywołuje reusable `pipeline-gate.yml` przed głównym jobem
+- Po kickoffie bramka jest no-op (data >= start); **nie trzeba usuwać** plików gate
+
+## Po kickoffie
+
+Nie zmieniaj cronów — pierwszy tydzień sam się ułoży (np. nd. 2026-09-07 → pierwszy Finalize z pełnym tygodniem Maps/Contact).

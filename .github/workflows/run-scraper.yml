@@ -32,11 +32,6 @@ jobs:
         env:
           ENABLE_GOOGLE_MAPS_ENRICHMENT: "false"
 
-      - name: Clear scraper cache
-        run: |
-          rm -f neueroeffnung_detail_cache.json neueroeffnung_maps_cache.json
-          rm -f neueroeffnung_wynik.xlsx neueroeffnung_wynik.json neueroeffnung_raport_brakow.json neueroeffnung_scraper.log
-
       - name: Run scraper
         run: python neueroeffnung_scraper.py
         env:

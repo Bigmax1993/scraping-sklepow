@@ -1,7 +1,6 @@
 # Automatyczny scraping sklepów
 
-Scraper pobierający dane o planowanych otwarciach sklepów, restauracji, drogerii i centrów handlowych z [neueroeffnung.info](https://www.neueroeffnung.info).
-
+Scraper pobierający dane o planowanych otwarciach sklepów, restauracji, drogerii i centrów handlowych.
 Pipeline produkcyjny jest podzielony na **5 segmentów** uruchamianych osobnymi workflow GitHub Actions. Wspólny stan między runami trzyma plik `neueroeffnung_staging.json` oraz cache (GHA Actions Cache).
 
 ---

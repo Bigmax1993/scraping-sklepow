@@ -16,11 +16,19 @@ jobs:
     if: needs.gate.outputs.skip != 'true'
     runs-on: ubuntu-latest
     timeout-minutes: 120
+    permissions:
+      actions: read
+      contents: read
     env:
       PIPELINE_STAGE: validate
       MAX_RUNTIME_SECONDS: "7200"
     steps:
       - uses: actions/checkout@v4
+
+      - name: Restore pipeline state from artifacts
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: bash .github/scripts/restore_pipeline_state.sh .
 
       - uses: actions/cache@v4
         with:
@@ -28,7 +36,7 @@ jobs:
             neueroeffnung_staging.json
             neueroeffnung_detail_cache.json
             neueroeffnung_processed.json
-          key: pipeline-${{ github.ref_name }}-${{ hashFiles('neueroeffnung_staging.json', 'neueroeffnung_processed.json') }}
+          key: pipeline-${{ github.ref_name }}-${{ github.run_id }}-${{ github.run_attempt }}
           restore-keys: |
             pipeline-${{ github.ref_name }}-
 
@@ -49,5 +57,18 @@ jobs:
           name: pipeline-staging-validate
           path: |
             neueroeffnung_staging.json
+            neueroeffnung_detail_cache.json
+            neueroeffnung_processed.json
             neueroeffnung_scraper.log
+          if-no-files-found: ignore
+
+      - name: Upload unified pipeline-state
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: pipeline-state
+          path: |
+            neueroeffnung_staging.json
+            neueroeffnung_detail_cache.json
+            neueroeffnung_processed.json
           if-no-files-found: ignore

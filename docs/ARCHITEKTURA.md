@@ -75,8 +75,8 @@ Nd 12:00      finalize      → Excel + mail + Google Drive
 | `contact_enrichment.py` | Serper batch, scrape, cache kontaktów |
 | `claude_record_normalizer.py` | Filtr jakości, spójny `informacja`, weryfikacja kontaktów |
 | `send_mail.py` | Gmail SMTP + kopia w Wysłane |
-| `scripts/gdrive_upload.py` | Upload `neueroeffnung_wynik.xlsx` → Google Drive (OAuth) |
-| `scripts/build_excel_from_staging.py` | Excel ze staging bez Claude (ręczny deploy) |
+| `scripts/gdrive_upload.py` | Upload Excel → Drive (**tylko Finalize**) |
+| `.github/scripts/restore_pipeline_state.sh` | Przywracanie staging/cache z artefaktów między segmentami |
 
 ### Funkcje etapów (`neueroeffnung_scraper.py`)
 
@@ -162,7 +162,8 @@ Merge w Discovery (`pipeline_state.merge_discovery_sheets`):
 | `neueroeffnung_contact_cache.json` | Contact | Zweryfikowane kontakty |
 | `neueroeffnung_processed.json` | Finalize | Fingerprinty wyeksportowanych |
 
-GHA używa `actions/cache@v4` z kluczem `pipeline-${{ github.ref_name }}-…`.
+GHA używa `actions/cache@v4` z kluczem `pipeline-${{ github.ref_name }}-${{ github.run_id }}-…` (nowy wpis co run).  
+**Źródło prawdy między workflow:** artefakty `pipeline-state` / `pipeline-staging-*` + `restore_pipeline_state.sh`.
 
 ---
 
@@ -250,12 +251,13 @@ Każdy segment używa `try/finally` do zapisu staging.
 ### Wspólny wzorzec
 
 1. `actions/checkout@v4`
-2. `actions/cache@v4` — staging + odpowiednie cache
-3. `setup-python` 3.13
-4. `pip install -r requirements.txt` (+ Playwright tylko Maps/full)
-5. `python neueroeffnung_scraper.py` z `PIPELINE_STAGE`
-6. Finalize: `pip install -r requirements-drive.txt` + `scripts/gdrive_upload.py`
-7. `upload-artifact` (always)
+2. **`restore_pipeline_state.sh`** — najnowszy artefakt `pipeline-state` / `pipeline-staging-*` ze staging JSON
+3. `actions/cache@v4` — uzupełnienie (klucz `pipeline-${{ github.ref_name }}-${{ github.run_id }}-…`)
+4. `setup-python` 3.13
+5. `pip install -r requirements.txt` (+ Playwright tylko Maps/full)
+6. `python neueroeffnung_scraper.py` z `PIPELINE_STAGE`
+7. Finalize: `requirements-drive.txt` + `scripts/gdrive_upload.py` **tylko gdy istnieje xlsx**
+8. `upload-artifact`: stage-specific + unified `pipeline-state`
 
 ### Sekrety per workflow
 
@@ -265,15 +267,12 @@ Każdy segment używa `try/finally` do zapisu staging.
 | maps | — (Playwright public) |
 | contact | `SERPER_API_KEY` |
 | finalize | `ANTHROPIC_API_KEY`, `GMAIL_USER`, `GMAIL_APP_PASSWORD`, `GDRIVE_FOLDER_ID`, `GDRIVE_OAUTH_*` |
-| build-upload-drive | `GDRIVE_FOLDER_ID`, `GDRIVE_OAUTH_*` |
-| run-scraper (full) | wszystkie powyższe (bez Drive, chyba że dodane ręcznie) |
+| run-scraper (full) | scrape/mail/API (bez Drive) |
 
-### `build-upload-drive.yml`
+### Przekazywanie stanu (artefakty)
 
-- Tylko `workflow_dispatch`
-- Pobiera artefakt `pipeline-staging-discovery` z podanego run ID
-- Buduje Excel (`build_excel_from_staging.py`) i uploaduje na Drive
-- Do awaryjnego / ręcznego deployu, gdy Finalize nie ma jeszcze rekordów `po_scrape_kontakt`
+Wcześniejszy błąd: cache z `hashFiles(staging)` był stały i nie zapisywał kolejnych wersji.  
+Teraz każdy segment **pobiera** najnowszy staging z artefaktów i **uploaduje** `pipeline-state`.
 
 ### `run-scraper.yml`
 
@@ -281,6 +280,7 @@ Każdy segment używa `try/finally` do zapisu staging.
 - `PIPELINE_STAGE=full`, timeout 4320 min
 - Uruchamia pytest przed scrape
 - Do testów integracyjnych / awaryjnego pełnego runu
+- **Nie** uploaduje na Google Drive (produkcja = Finalize)
 
 ---
 
@@ -302,10 +302,10 @@ Każdy segment używa `try/finally` do zapisu staging.
 | `CONTACT_CLAUDE_BATCH_SIZE` | `20` | Claude batch |
 | `GMAIL_USER`, `GMAIL_APP_PASSWORD` | — | Finalize |
 | `SEND_EMAIL` | `true` w GHA | Finalize |
-| `GDRIVE_FOLDER_ID` | — | Finalize, build-upload-drive |
-| `GDRIVE_OAUTH_CLIENT_ID` | — | Finalize, build-upload-drive |
-| `GDRIVE_OAUTH_CLIENT_SECRET` | — | Finalize, build-upload-drive |
-| `GDRIVE_OAUTH_REFRESH_TOKEN` | — | Finalize, build-upload-drive |
+| `GDRIVE_FOLDER_ID` | — | Finalize (tylko pełny Excel) |
+| `GDRIVE_OAUTH_CLIENT_ID` | — | Finalize |
+| `GDRIVE_OAUTH_CLIENT_SECRET` | — | Finalize |
+| `GDRIVE_OAUTH_REFRESH_TOKEN` | — | Finalize |
 
 ---
 

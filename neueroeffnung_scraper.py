@@ -1922,6 +1922,8 @@ def run_validate_stage(logger: logging.Logger):
     pending = count_records_at_stage(sheets, DATA_SHEET_NAMES, STAGE_DISCOVERY)
     if pending == 0:
         logger.info("Validate: brak rekordów discovery — koniec.")
+        if STAGING_FILE.exists():
+            STAGING_FILE.unlink()
         return StageResult()
 
     logger.info("Validate: %s rekordów discovery", pending)
@@ -1996,6 +1998,9 @@ def run_maps_stage(logger: logging.Logger):
     pending = iter_records_at_stage(sheets, DATA_SHEET_NAMES, STAGE_VALIDATED)
     if not pending:
         logger.info("Maps: brak rekordów validated — koniec.")
+        # Nie uploaduj regressywnego stagingu z restore jako nowego artefaktu.
+        if STAGING_FILE.exists():
+            STAGING_FILE.unlink()
         return StageResult()
 
     limit = maps_batch_limit()
@@ -2046,6 +2051,8 @@ def run_contact_stage(logger: logging.Logger):
     po_maps = iter_records_at_stage(sheets, DATA_SHEET_NAMES, STAGE_PO_MAPS)
     if not po_maps:
         logger.info("Contact: brak rekordów po_maps — koniec.")
+        if STAGING_FILE.exists():
+            STAGING_FILE.unlink()
         return StageResult()
 
     advanced = 0
@@ -2135,6 +2142,8 @@ def run_finalize_stage(logger: logging.Logger):
     total_finalize = sum(len(v) for v in finalize_sheets.values())
     if total_finalize == 0:
         logger.info("Finalize: brak rekordów po_scrape_kontakt — koniec.")
+        if STAGING_FILE.exists():
+            STAGING_FILE.unlink()
         return StageResult()
 
     logger.info("Finalize: %s rekordów do Claude + Excel", total_finalize)

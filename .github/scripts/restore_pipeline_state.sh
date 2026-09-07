@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
-# Przywraca najnowszy stan pipeline (staging + cache JSON) z artefaktów GHA.
-# Bierze najnowszy nieprzeterminowany artefakt pipeline-state / pipeline-staging-*,
-# pomijając te bez neueroeffnung_staging.json.
+# Przywraca najlepszy stan pipeline (staging + cache JSON) z artefaktów GHA.
+# Kandydaci: pipeline-state / pipeline-staging-* ; sort: rozmiar ↓, data ↓.
+# Pomija artefakty bez neueroeffnung_staging.json.
 set -euo pipefail
 
 REPO="${GITHUB_REPOSITORY:?}"
@@ -20,7 +20,7 @@ mapfile -t CANDIDATES < <(
               or .name=="pipeline-staging-discovery")
         | {id, name, created_at, size_in_bytes}
       ]
-      | sort_by(.created_at)
+      | sort_by(.size_in_bytes, .created_at)
       | reverse
       | .[]
       | "\(.id)\t\(.name)\t\(.created_at)\t\(.size_in_bytes)"
@@ -77,7 +77,8 @@ for line in "${CANDIDATES[@]}"; do
   id="${line%%$'\t'*}"
   rest="${line#*$'\t'}"
   name="${rest%%$'\t'*}"
-  echo "Kandydat: ${name} id=${id}"
+  size="${line##*$'\t'}"
+  echo "Kandydat: ${name} id=${id} size=${size}"
   if try_restore "$id" "$name"; then
     exit 0
   fi

@@ -251,8 +251,8 @@ Każdy segment używa `try/finally` do zapisu staging.
 ### Wspólny wzorzec
 
 1. `actions/checkout@v4`
-2. **`restore_pipeline_state.sh`** — najnowszy artefakt `pipeline-state` / `pipeline-staging-*` ze staging JSON
-3. `actions/cache@v4` — uzupełnienie (klucz `pipeline-${{ github.ref_name }}-${{ github.run_id }}-…`)
+2. `actions/cache@v4` — tylko cache enrichment (`*_cache.json`, `processed`); **bez** staging
+3. **`restore_pipeline_state.sh`** — nadpisuje staging z najnowszego artefaktu `pipeline-state` / `pipeline-staging-*`
 4. `setup-python` 3.13
 5. `pip install -r requirements.txt` (+ Playwright tylko Maps/full)
 6. `python neueroeffnung_scraper.py` z `PIPELINE_STAGE`

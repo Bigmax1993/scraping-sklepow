@@ -25,20 +25,19 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
-      - name: Restore pipeline state from artifacts
-        env:
-          GH_TOKEN: ${{ github.token }}
-        run: bash .github/scripts/restore_pipeline_state.sh .
-
       - uses: actions/cache@v4
         with:
           path: |
-            neueroeffnung_staging.json
             neueroeffnung_detail_cache.json
             neueroeffnung_processed.json
           key: pipeline-${{ github.ref_name }}-${{ github.run_id }}-${{ github.run_attempt }}
           restore-keys: |
             pipeline-${{ github.ref_name }}-
+
+      - name: Restore pipeline state from artifacts
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: bash .github/scripts/restore_pipeline_state.sh .
 
       - uses: actions/setup-python@v5
         with:

@@ -52,7 +52,7 @@ jobs:
         run: pip install -r requirements-drive.txt
 
       - name: Upload Excel to Google Drive
-        if: success()
+        if: success() && hashFiles('neueroeffnung_wynik.xlsx') != ''
         env:
           GDRIVE_FOLDER_ID: ${{ secrets.GDRIVE_FOLDER_ID }}
           GDRIVE_OAUTH_CLIENT_ID: ${{ secrets.GDRIVE_OAUTH_CLIENT_ID }}

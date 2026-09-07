@@ -10,7 +10,7 @@ Pipeline produkcyjny jest podzielony na **5 segmentów** uruchamianych osobnymi 
 
 ```
 DISCOVERY → VALIDATE → MAPS → CONTACT → FINALIZE
- (scrape)   (retry)   (GMaps) (Serper)  (Claude + Excel + mail)
+ (scrape)   (retry)   (GMaps) (Serper)  (Claude + Excel + mail + Drive)
 ```
 
 | Segment | Co robi | Cron (PL, CEST) | Limit czasu |
@@ -19,7 +19,7 @@ DISCOVERY → VALIDATE → MAPS → CONTACT → FINALIZE
 | **Validate** | Walidacja + retry brakujących pól | Codziennie **08:30** | 2 h |
 | **Maps** | Google Maps (Playwright), partia rekordów | Pon–Pt **22:00** | 4 h |
 | **Contact** | Serper batch + scrape stron | Sob **02:00** i **18:00** | 4 h × 2 |
-| **Finalize** | Claude filtr + Excel + e-mail | Nd **12:00** | 4 h |
+| **Finalize** | Claude filtr + Excel + e-mail + **Google Drive** | Nd **12:00** | 4 h |
 
 ### Przepływ tygodnia
 
@@ -31,7 +31,7 @@ Sob 02:00     CONTACT #1
 Sob 08:30     VALIDATE
 Sob 18:00     CONTACT #2
 Nd 08:30      VALIDATE
-Nd 12:00      FINALIZE    → Excel + mail
+Nd 12:00      FINALIZE    → Excel + mail + Google Drive
 ```
 
 ### Limit czasu — graceful stop
@@ -56,9 +56,16 @@ Repozytorium: [github.com/Bigmax1993/scraping-sklepow](https://github.com/Bigmax
 | Pipeline — Maps | `pipeline-maps.yml` | cron + ręcznie |
 | Pipeline — Contact | `pipeline-contact.yml` | cron + ręcznie |
 | Pipeline — Finalize | `pipeline-finalize.yml` | cron + ręcznie |
+| Build Excel → Google Drive | `build-upload-drive.yml` | **tylko ręcznie** (Excel z artefaktu Discovery → Drive) |
 | Run scraper (full) | `run-scraper.yml` | **tylko ręcznie** (monolit dev) |
 
 Ręczne uruchomienie: **Actions** → wybierz workflow → **Run workflow**.
+
+Awaryjny / ręczny deploy Excela na Drive (gdy Finalize nie ma jeszcze rekordów `po_scrape_kontakt`):
+
+```powershell
+gh workflow run "Build Excel → Google Drive" -R Bigmax1993/scraping-sklepow -f discovery_run_id=<RUN_ID>
+```
 
 ### Jednorazowy start: 2026-09-03
 
@@ -70,7 +77,7 @@ Do **2026-09-03 (przed 03:30)** crony segmentów są **wstrzymane** (bramka daty
 | **2026-09-03 (czw)** | 03:30 Discovery → 08:30 Validate → 22:00 Maps |
 | **2026-09-04–05** | Discovery, Validate, Maps (pn–pt) |
 | **2026-09-06 (sob)** | Contact 02:00 + 18:00, Validate 08:30 |
-| **2026-09-07 (nd)** | Validate 08:30 → **Finalize 12:00** (pierwszy Excel + mail) |
+| **2026-09-07 (nd)** | Validate 08:30 → **Finalize 12:00** (pierwszy Excel + mail + Drive) |
 
 Bramka: `.github/scripts/pipeline_start_gate.sh` (`PIPELINE_START_DATE=2026-09-03`). Ręczne **Run workflow** omija bramkę.
 
@@ -82,8 +89,14 @@ Bramka: `.github/scripts/pipeline_start_gate.sh` (`PIPELINE_START_DATE=2026-09-0
 | `GMAIL_APP_PASSWORD` | Finalize, Run scraper (full) |
 | `ANTHROPIC_API_KEY` | Finalize |
 | `SERPER_API_KEY` | Contact, Run scraper (full) |
+| `GDRIVE_FOLDER_ID` | Finalize, Build Excel → Google Drive |
+| `GDRIVE_OAUTH_CLIENT_ID` | Finalize, Build Excel → Google Drive |
+| `GDRIVE_OAUTH_CLIENT_SECRET` | Finalize, Build Excel → Google Drive |
+| `GDRIVE_OAUTH_REFRESH_TOKEN` | Finalize, Build Excel → Google Drive |
 
 Artifacty: staging, logi, Excel (Finalize) — dostępne po każdym runie w zakładce runu.
+
+**Google Drive:** po Finalize Excel trafia do [folderu projektu](https://drive.google.com/drive/folders/1iwXppsgdZry3BHW46uSPKwOO3lqXBzOf) (`neueroeffnung_wynik.xlsx`, nadpisywany). Szczegóły: [docs/GOOGLE_DRIVE.md](docs/GOOGLE_DRIVE.md).
 
 Szczegóły techniczne: [docs/ARCHITEKTURA.md](docs/ARCHITEKTURA.md).
 
@@ -95,9 +108,9 @@ Szczegóły techniczne: [docs/ARCHITEKTURA.md](docs/ARCHITEKTURA.md).
 
 | Plik | Opis |
 |------|------|
-| `neueroeffnung_wynik.xlsx` | Główny raport Excel (8 arkuszy) |
-| `neueroeffnung_wynik.json` | Pełne dane po Claude i filtrach |
-| `neueroeffnung_raport_brakow.json` | Rekordy z brakującymi polami |
+| `neueroeffnung_wynik.xlsx` | Główny raport Excel (8 arkuszy) — też **Google Drive** |
+| `neueroeffnung_wynik.json` | Pełne dane po Claude i filtrach (tylko artefakt GHA) |
+| `neueroeffnung_raport_brakow.json` | Rekordy z brakującymi polami (tylko artefakt GHA) |
 | `neueroeffnung_scraper.log` | Log bieżącego runu |
 
 ### Stan pipeline'u (między segmentami)
@@ -265,6 +278,17 @@ Odbiorca: **svinchak1993@gmail.com** (stały w `send_mail.py`).
 
 Ręczna wysyłka: `python send_mail.py`
 
+### Google Drive
+
+| Zmienna | Opis |
+|---------|------|
+| `GDRIVE_FOLDER_ID` | ID folderu docelowego |
+| `GDRIVE_OAUTH_CLIENT_ID` | OAuth client ID |
+| `GDRIVE_OAUTH_CLIENT_SECRET` | OAuth client secret |
+| `GDRIVE_OAUTH_REFRESH_TOKEN` | OAuth refresh token |
+
+Ręczny upload: `python scripts/gdrive_upload.py` (wymaga `neueroeffnung_wynik.xlsx` + secrets w env).
+
 ---
 
 ## Konfiguracja (stałe w kodzie)
@@ -306,17 +330,24 @@ Automatyczny scraping sklepow/
 ├── contact_enrichment.py         # Serper + scrape
 ├── claude_record_normalizer.py   # filtr Claude + spójny JSON
 ├── send_mail.py                  # wysyłka Excela (Gmail)
+├── scripts/
+│   ├── gdrive_upload.py          # upload Excel → Google Drive
+│   ├── gdrive_oauth_setup.py     # jednorazowy OAuth → Secrets
+│   └── build_excel_from_staging.py
 ├── .github/workflows/
 │   ├── pipeline-discovery.yml
 │   ├── pipeline-validate.yml
 │   ├── pipeline-maps.yml
 │   ├── pipeline-contact.yml
-│   ├── pipeline-finalize.yml
+│   ├── pipeline-finalize.yml     # + upload Drive
+│   ├── build-upload-drive.yml    # ręczny Excel z Discovery → Drive
 │   └── run-scraper.yml           # monolit (ręcznie)
 ├── docs/
-│   └── ARCHITEKTURA.md
+│   ├── ARCHITEKTURA.md
+│   └── GOOGLE_DRIVE.md
 ├── tests/
-└── requirements.txt
+├── requirements.txt
+└── requirements-drive.txt
 ```
 
 ---
@@ -328,10 +359,11 @@ Automatyczny scraping sklepow/
 | Segment „nic nie robi” | Sprawdź `pipeline_stage` w staging — może brak rekordów na tym etapie |
 | Maps/Contact urwane w połowie | Normalne przy limicie czasu — następny cron wznawia |
 | Pusty Excel w tygodniu | Finalize tylko nd. 12:00; sprawdź czy rekordy doszły do `po_scrape_kontakt` |
+| Brak Excela na Drive | Sprawdź secrets `GDRIVE_*`; log kroku *Upload Excel to Google Drive*; awaryjnie **Build Excel → Google Drive** |
 | Status „Needs review” | Arkusz **Validation report** lub `neueroeffnung_raport_brakow.json` |
 | Brak kontaktów | Sprawdź `SERPER_API_KEY`, `neueroeffnung_contact_batch.json` |
 | Stary cache psuje dane | Usuń odpowiedni `*_cache.json` i uruchom segment ponownie |
-| GHA cache „puste” | Pierwszy run segmentu startuje od zera; kolejne runy łączą stan |
+| GHA cache „puste” | Pierwszy run segmentu startuje od zera; kolejne runy łączą stan; staging też w artefaktach runu |
 
 ---
 

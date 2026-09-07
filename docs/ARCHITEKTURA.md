@@ -6,7 +6,7 @@ Dokument techniczny dla repozytorium **scraping-sklepow**. Opisuje segmentację,
 
 ## 1. Przegląd
 
-Pipeline pobiera wpisy z neueroeffnung.info, wzbogaca je (Maps, kontakty, Claude), filtruje i eksportuje tygodniowy Excel z e-mailem.
+Pipeline pobiera wpisy z neueroeffnung.info, wzbogaca je (Maps, kontakty, Claude), filtruje i eksportuje tygodniowy Excel: e-mail + **Google Drive**.
 
 **Produkcja:** 5 niezależnych workflow GHA, wspólny stan w `neueroeffnung_staging.json`.
 
@@ -18,6 +18,7 @@ Pipeline pobiera wpisy z neueroeffnung.info, wzbogaca je (Maps, kontakty, Claude
 │  HTTP scrape│   │ retry    │   │ Play │   │ Serper  │   │ Claude   │
 └─────────────┘   └──────────┘   └──────┘   └─────────┘   │ Excel    │
        │                │             │            │         │ mail     │
+       │                │             │            │         │ Drive    │
        └────────────────┴─────────────┴────────────┴─────────┴──────────┘
                               neueroeffnung_staging.json
                          + cache (detail, maps, contact, processed)
@@ -59,7 +60,7 @@ Sob 02:00     contact #1
 Sob 08:30     validate
 Sob 18:00     contact #2
 Nd 08:30      validate
-Nd 12:00      finalize      → Excel + mail
+Nd 12:00      finalize      → Excel + mail + Google Drive
 ```
 
 ---
@@ -74,6 +75,8 @@ Nd 12:00      finalize      → Excel + mail
 | `contact_enrichment.py` | Serper batch, scrape, cache kontaktów |
 | `claude_record_normalizer.py` | Filtr jakości, spójny `informacja`, weryfikacja kontaktów |
 | `send_mail.py` | Gmail SMTP + kopia w Wysłane |
+| `scripts/gdrive_upload.py` | Upload `neueroeffnung_wynik.xlsx` → Google Drive (OAuth) |
+| `scripts/build_excel_from_staging.py` | Excel ze staging bez Claude (ręczny deploy) |
 
 ### Funkcje etapów (`neueroeffnung_scraper.py`)
 
@@ -201,9 +204,12 @@ GHA używa `actions/cache@v4` z kluczem `pipeline-${{ github.ref_name }}-…`.
 
 1. Rekordy `pipeline_stage=po_scrape_kontakt`
 2. Claude batch: filtr, `informacja`, kontakty
-3. Przy limicie czasu: zapis staging, **bez Excel/mail**, wznowienie nd.+
+3. Przy limicie czasu: zapis staging, **bez Excel/mail/Drive**, wznowienie nd.+
 4. Filtr godzin pracy → Skipped
 5. Excel 8 arkuszy, mail, `processed.json`, cleanup staging
+6. Upload `neueroeffnung_wynik.xlsx` na Google Drive (`scripts/gdrive_upload.py`)
+
+Szczegóły Drive: [GOOGLE_DRIVE.md](GOOGLE_DRIVE.md).
 
 ---
 
@@ -223,7 +229,7 @@ Każdy segment używa `try/finally` do zapisu staging.
 | Validate | Partial retry → save |
 | Maps | Partial batch → save cache |
 | Contact | Partial scrape → save; nieadvance nieukończonych |
-| Finalize | Partial Claude → save staging; skip Excel/mail |
+| Finalize | Partial Claude → save staging; skip Excel/mail/Drive |
 
 ---
 
@@ -248,7 +254,8 @@ Każdy segment używa `try/finally` do zapisu staging.
 3. `setup-python` 3.13
 4. `pip install -r requirements.txt` (+ Playwright tylko Maps/full)
 5. `python neueroeffnung_scraper.py` z `PIPELINE_STAGE`
-6. `upload-artifact` (always)
+6. Finalize: `pip install -r requirements-drive.txt` + `scripts/gdrive_upload.py`
+7. `upload-artifact` (always)
 
 ### Sekrety per workflow
 
@@ -257,8 +264,16 @@ Każdy segment używa `try/finally` do zapisu staging.
 | discovery, validate | — |
 | maps | — (Playwright public) |
 | contact | `SERPER_API_KEY` |
-| finalize | `ANTHROPIC_API_KEY`, `GMAIL_USER`, `GMAIL_APP_PASSWORD` |
-| run-scraper (full) | wszystkie powyższe |
+| finalize | `ANTHROPIC_API_KEY`, `GMAIL_USER`, `GMAIL_APP_PASSWORD`, `GDRIVE_FOLDER_ID`, `GDRIVE_OAUTH_*` |
+| build-upload-drive | `GDRIVE_FOLDER_ID`, `GDRIVE_OAUTH_*` |
+| run-scraper (full) | wszystkie powyższe (bez Drive, chyba że dodane ręcznie) |
+
+### `build-upload-drive.yml`
+
+- Tylko `workflow_dispatch`
+- Pobiera artefakt `pipeline-staging-discovery` z podanego run ID
+- Buduje Excel (`build_excel_from_staging.py`) i uploaduje na Drive
+- Do awaryjnego / ręcznego deployu, gdy Finalize nie ma jeszcze rekordów `po_scrape_kontakt`
 
 ### `run-scraper.yml`
 
@@ -287,6 +302,10 @@ Każdy segment używa `try/finally` do zapisu staging.
 | `CONTACT_CLAUDE_BATCH_SIZE` | `20` | Claude batch |
 | `GMAIL_USER`, `GMAIL_APP_PASSWORD` | — | Finalize |
 | `SEND_EMAIL` | `true` w GHA | Finalize |
+| `GDRIVE_FOLDER_ID` | — | Finalize, build-upload-drive |
+| `GDRIVE_OAUTH_CLIENT_ID` | — | Finalize, build-upload-drive |
+| `GDRIVE_OAUTH_CLIENT_SECRET` | — | Finalize, build-upload-drive |
+| `GDRIVE_OAUTH_REFRESH_TOKEN` | — | Finalize, build-upload-drive |
 
 ---
 
@@ -332,7 +351,7 @@ flowchart TB
     C1 --> C2
     C2 --> V3
     V3 --> F
-    F -->|Excel + mail| OUT[Wynik tygodniowy]
+    F -->|Excel + mail + Drive| OUT[Wynik tygodniowy]
 ```
 
 ---
@@ -343,3 +362,4 @@ flowchart TB
 - **Zmiana harmonogramu:** edytuj `cron` w odpowiednim `pipeline-*.yml`.
 - **Większy throughput Maps:** zwiększ liczbę dni lub `MAPS_BATCH_LIMIT` (przy zachowaniu `MAX_RUNTIME_SECONDS`).
 - **Reset pipeline'u:** usuń `neueroeffnung_staging.json` i opcjonalnie cache; `processed.json` zachowaj, jeśli nie chcesz re-eksportu.
+- **Zmiana folderu Drive:** zaktualizuj secret `GDRIVE_FOLDER_ID` i wpis w [GOOGLE_DRIVE.md](GOOGLE_DRIVE.md).

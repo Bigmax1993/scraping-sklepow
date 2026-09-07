@@ -4,7 +4,7 @@ on:
   workflow_dispatch:
   schedule:
     # Pon–Pt 03:30 czasu polskiego (CEST, UTC+2) = 01:30 UTC
-    # Pierwszy automatyczny run: 2026-09-03 03:30 PL (bramka PIPELINE_START_DATE)
+    # Co 4 tygodnie od 2026-10-05 (bramka PIPELINE_START_DATE + CYCLE 28 dni)
     - cron: "30 1 * * 1-5"
 
 jobs:

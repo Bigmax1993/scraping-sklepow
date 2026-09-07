@@ -1,10 +1,10 @@
-# Reusable: bramka daty startu pipeline (jednorazowo od 2026-09-03)
+# Reusable: bramka cyklu pipeline (co 4 tygodnie od 2026-10-05)
 
 on:
   workflow_call:
     outputs:
       skip:
-        description: "true = pomiń główny job (przed datą startu)"
+        description: "true = pomiń główny job (poza cyklem / przed startem)"
         value: ${{ jobs.gate.outputs.skip }}
 
 jobs:
@@ -13,9 +13,10 @@ jobs:
     outputs:
       skip: ${{ steps.gate.outputs.skip }}
     env:
-      PIPELINE_START_DATE: "2026-09-03"
+      PIPELINE_START_DATE: "2026-10-05"
+      PIPELINE_CYCLE_DAYS: "28"
     steps:
       - uses: actions/checkout@v4
-      - name: Sprawdź datę startu pipeline
+      - name: Sprawdź cykl pipeline (co 4 tygodnie)
         id: gate
         run: bash .github/scripts/pipeline_start_gate.sh

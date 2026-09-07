@@ -4,7 +4,7 @@ on:
   workflow_dispatch:
   schedule:
     # Pon–Pt 22:00 czasu polskiego (CEST) = 20:00 UTC
-    # Aktywne od PIPELINE_START_DATE (2026-09-03)
+    # Co 4 tygodnie od 2026-10-05 (bramka CYCLE 28 dni)
     - cron: "0 20 * * 1-5"
 
 jobs:

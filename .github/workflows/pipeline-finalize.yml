@@ -48,6 +48,18 @@ jobs:
       - name: Run finalize
         run: python neueroeffnung_scraper.py
 
+      - name: Install Drive dependencies
+        run: pip install -r requirements-drive.txt
+
+      - name: Upload Excel to Google Drive
+        if: success()
+        env:
+          GDRIVE_FOLDER_ID: ${{ secrets.GDRIVE_FOLDER_ID }}
+          GDRIVE_OAUTH_CLIENT_ID: ${{ secrets.GDRIVE_OAUTH_CLIENT_ID }}
+          GDRIVE_OAUTH_CLIENT_SECRET: ${{ secrets.GDRIVE_OAUTH_CLIENT_SECRET }}
+          GDRIVE_OAUTH_REFRESH_TOKEN: ${{ secrets.GDRIVE_OAUTH_REFRESH_TOKEN }}
+        run: python scripts/gdrive_upload.py
+
       - name: Upload Excel artifact
         if: always()
         uses: actions/upload-artifact@v4

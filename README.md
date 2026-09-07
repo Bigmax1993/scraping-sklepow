@@ -13,17 +13,28 @@ DISCOVERY → VALIDATE → MAPS → CONTACT → FINALIZE
  (scrape)   (retry)   (GMaps) (Serper)  (Claude + Excel + mail + Drive)
 ```
 
-| Segment | Co robi | Cron (PL, CEST) | Limit czasu |
-|---------|---------|-----------------|-------------|
+Harmonogram poniżej obowiązuje **tylko w aktywnym tygodniu cyklu** (co 4 tygodnie). Poza tym crony są pomijane przez bramkę.
+
+| Segment | Co robi | Cron (PL, CEST) w tygodniu cyklu | Limit czasu |
+|---------|---------|----------------------------------|-------------|
 | **Discovery** | Scrape 4 kategorii, filtr dat, merge do staging | Pon–Pt **03:30** | 4 h |
 | **Validate** | Walidacja + retry brakujących pól | Codziennie **08:30** | 2 h |
 | **Maps** | Google Maps (Playwright), partia rekordów | Pon–Pt **22:00** | 4 h |
 | **Contact** | Serper batch + scrape stron | Sob **02:00** i **18:00** | 4 h × 2 |
 | **Finalize** | Claude filtr + Excel + e-mail + **Google Drive** | Nd **12:00** | 4 h |
 
-### Przepływ tygodnia
+### Cykl co 4 tygodnie
+
+| Parametr | Wartość |
+|----------|---------|
+| Start | **2026-10-05** (poniedziałek) |
+| Długość cyklu | **28 dni** |
+| Aktywny tydzień | dni cyklu **0–6** (pon–niedz) |
+| Poza cyklem | scheduled cron → `skip=true` (success + notice) |
 
 ```
+Aktywny tydzień cyklu (dni 0–6):
+
 Pn–Pt 03:30   DISCOVERY
 Pn–Pt 08:30   VALIDATE
 Pn–Pt 22:00   MAPS        (max 200 rek./run)
@@ -33,6 +44,15 @@ Sob 18:00     CONTACT #2
 Nd 08:30      VALIDATE
 Nd 12:00      FINALIZE    → Excel + mail + Google Drive
 ```
+
+Kolejne tygodnie pipeline (kotwica 2026-10-05 + n×28):
+
+| Cykl | Poniedziałek startu | Finalize (niedziela) |
+|------|---------------------|----------------------|
+| 1 | **2026-10-05** | 2026-10-11 |
+| 2 | 2026-11-02 | 2026-11-08 |
+| 3 | 2026-11-30 | 2026-12-06 |
+| 4 | 2026-12-28 | 2027-01-03 |
 
 ### Limit czasu — graceful stop
 
@@ -51,6 +71,7 @@ Repozytorium: [github.com/Bigmax1993/scraping-sklepow](https://github.com/Bigmax
 
 | Workflow | Plik | Trigger |
 |----------|------|---------|
+| Pipeline gate (reusable) | `pipeline-gate.yml` | wywoływany przez segmenty |
 | Pipeline — Discovery | `pipeline-discovery.yml` | cron + ręcznie |
 | Pipeline — Validate | `pipeline-validate.yml` | cron + ręcznie |
 | Pipeline — Maps | `pipeline-maps.yml` | cron + ręcznie |
@@ -58,23 +79,22 @@ Repozytorium: [github.com/Bigmax1993/scraping-sklepow](https://github.com/Bigmax
 | Pipeline — Finalize | `pipeline-finalize.yml` | cron + ręcznie |
 | Run scraper (full) | `run-scraper.yml` | **tylko ręcznie** (monolit dev) |
 
-Ręczne uruchomienie: **Actions** → wybierz workflow → **Run workflow**.
+Ręczne uruchomienie: **Actions** → wybierz workflow → **Run workflow** (omija bramkę cyklu).
 
-**Stan między segmentami:** każdy run przywraca najnowszy artefakt `pipeline-state` / `pipeline-staging-*` (skrypt `.github/scripts/restore_pipeline_state.sh`), potem zapisuje zaktualizowany `pipeline-state`. Cache GHA jest tylko uzupełnieniem.
+**Stan między segmentami:** każdy run wybiera najlepszy artefakt `pipeline-state` / `pipeline-staging-*` (skrypt `.github/scripts/restore_pipeline_state.sh` + `score_staging.py`: najwyższy `pipeline_stage`, potem liczba rekordów), potem zapisuje zaktualizowany `pipeline-state`. Cache GHA jest tylko uzupełnieniem.
 
-### Jednorazowy start: 2026-09-03
+### Pierwszy cykl: 2026-10-05 – 2026-10-11
 
-Do **2026-09-03 (przed 03:30)** crony segmentów są **wstrzymane** (bramka daty).  
-**Pierwszy automatyczny run:** **czwartek 2026-09-03 o 03:30** — **Discovery**, potem harmonogram tygodnia.
+Do **2026-10-05** crony segmentów są **wstrzymane** (bramka daty).  
+**Pierwszy automatyczny run:** **poniedziałek 2026-10-05 o 03:30** — **Discovery**, potem tydzień cyklu.
 
 | Data | Co się dzieje |
 |------|----------------|
-| **2026-09-03 (czw)** | 03:30 Discovery → 08:30 Validate → 22:00 Maps |
-| **2026-09-04–05** | Discovery, Validate, Maps (pn–pt) |
-| **2026-09-06 (sob)** | Contact 02:00 + 18:00, Validate 08:30 |
-| **2026-09-07 (nd)** | Validate 08:30 → **Finalize 12:00** (pierwszy Excel + mail + Drive) |
+| **2026-10-05–09** (pn–pt) | Discovery 03:30 → Validate 08:30 → Maps 22:00 |
+| **2026-10-10** (sob) | Contact 02:00 + 18:00, Validate 08:30 |
+| **2026-10-11** (nd) | Validate 08:30 → **Finalize 12:00** (Excel + mail + Drive) |
 
-Bramka: `.github/scripts/pipeline_start_gate.sh` (`PIPELINE_START_DATE=2026-09-03`). Ręczne **Run workflow** omija bramkę.
+Bramka: `.github/workflows/pipeline-gate.yml` → `.github/scripts/pipeline_start_gate.sh` (`PIPELINE_START_DATE=2026-10-05`, `PIPELINE_CYCLE_DAYS=28`).
 
 ### Secrets (GitHub)
 
@@ -99,7 +119,7 @@ Szczegóły techniczne: [docs/ARCHITEKTURA.md](docs/ARCHITEKTURA.md).
 
 ## Pliki wynikowe i stanu
 
-### Po Finalize (tygodniowy deliverable)
+### Po Finalize (deliverable cyklu)
 
 | Plik | Opis |
 |------|------|
@@ -331,9 +351,11 @@ Automatyczny scraping sklepow/
 │   └── build_excel_from_staging.py  # diagnostyka lokalna (bez Drive w CI)
 ├── .github/
 │   ├── scripts/
-│   │   ├── pipeline_start_gate.sh
-│   │   └── restore_pipeline_state.sh  # staging z artefaktów między segmentami
+│   │   ├── pipeline_start_gate.sh     # start + cykl 28 dni
+│   │   ├── restore_pipeline_state.sh  # najlepszy staging z artefaktów
+│   │   └── score_staging.py           # rank etapu + liczba rekordów
 │   └── workflows/
+│       ├── pipeline-gate.yml         # reusable bramka cyklu
 │       ├── pipeline-discovery.yml
 │       ├── pipeline-validate.yml
 │       ├── pipeline-maps.yml
@@ -354,9 +376,10 @@ Automatyczny scraping sklepow/
 
 | Problem | Rozwiązanie |
 |---------|-------------|
+| Cron kończy się w ~kilka sekund | Poza tygodniem cyklu (co 28 dni) — normalne; sprawdź notice bramki w logu joba `gate` |
 | Segment „nic nie robi” | Sprawdź `pipeline_stage` w staging — może brak rekordów na tym etapie |
 | Maps/Contact urwane w połowie | Normalne przy limicie czasu — następny cron wznawia |
-| Pusty Excel w tygodniu | Finalize tylko nd. 12:00; sprawdź czy rekordy doszły do `po_scrape_kontakt` |
+| Pusty Excel w cyklu | Finalize tylko nd. 12:00 w tygodniu cyklu; sprawdź czy rekordy doszły do `po_scrape_kontakt` |
 | Brak Excela na Drive | Tylko Finalize uploaduje; sprawdź secrets `GDRIVE_*` i czy powstał xlsx |
 | Segment „nic nie robi” / puste staging | Sprawdź log *Restore pipeline state*; musi być artefakt z `neueroeffnung_staging.json` |
 | Status „Needs review” | Arkusz **Validation report** lub `neueroeffnung_raport_brakow.json` |

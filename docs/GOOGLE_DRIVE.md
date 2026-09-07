@@ -51,9 +51,11 @@ python scripts/gdrive_oauth_setup.py
 | Discovery / Validate / Maps / Contact | Nie |
 | Run scraper (full) | Nie (dev); produkcja = segment Finalize |
 
-Finalize (Nd **12:00** PL lub ręcznie): Claude → Excel → mail → **Drive**.
+Finalize (Nd **12:00** PL w tygodniu cyklu 28-dniowego, lub ręcznie): Claude → Excel → mail → **Drive**.
 
 Jeśli brak rekordów `po_scrape_kontakt`, Excel nie powstaje i krok Drive jest pomijany (`hashFiles`).
+
+Pierwszy automatyczny Finalize cyklu: **2026-10-11**.
 
 ---
 

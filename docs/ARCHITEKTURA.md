@@ -6,7 +6,7 @@ Dokument techniczny dla repozytorium **scraping-sklepow**. Opisuje segmentację,
 
 ## 1. Przegląd
 
-Pipeline pobiera wpisy z neueroeffnung.info, wzbogaca je (Maps, kontakty, Claude), filtruje i eksportuje tygodniowy Excel: e-mail + **Google Drive**.
+Pipeline pobiera wpisy z neueroeffnung.info, wzbogaca je (Maps, kontakty, Claude), filtruje i eksportuje Excel w cyklu 28-dniowym: e-mail + **Google Drive**.
 
 **Produkcja:** 5 niezależnych workflow GHA, wspólny stan w `neueroeffnung_staging.json`.
 
@@ -28,8 +28,10 @@ Pipeline pobiera wpisy z neueroeffnung.info, wzbogaca je (Maps, kontakty, Claude
 
 ## 2. Harmonogram GHA (czas polski, CEST UTC+2)
 
-| Segment | Cron UTC | Cron PL | GHA timeout | `MAX_RUNTIME_SECONDS` |
-|---------|----------|---------|-------------|------------------------|
+Crony w YAML są **codzienne / pn–pt / sob / nd**, ale realna praca dzieje się **tylko w aktywnym tygodniu cyklu 28-dniowego** (bramka `pipeline-gate.yml`).
+
+| Segment | Cron UTC | Cron PL (tydzień cyklu) | GHA timeout | `MAX_RUNTIME_SECONDS` |
+|---------|----------|-------------------------|-------------|------------------------|
 | Discovery | `30 1 * * 1-5` | Pn–Pt 03:30 | 240 min | 14400 (4 h) |
 | Validate | `30 6 * * *` | Codziennie 08:30 | 120 min | 7200 (2 h) |
 | Maps | `0 20 * * 1-5` | Pn–Pt 22:00 | 240 min | 14400 |
@@ -38,19 +40,28 @@ Pipeline pobiera wpisy z neueroeffnung.info, wzbogaca je (Maps, kontakty, Claude
 
 Po przejściu na CET (UTC+1) skoryguj crony w plikach `.github/workflows/pipeline-*.yml`.
 
-### Jednorazowy kickoff: 2026-09-03
+### Cykl 28 dni + kickoff: 2026-10-05
 
 Wszystkie workflow segmentów używają reusable **`pipeline-gate.yml`**.  
 Skrypt **`.github/scripts/pipeline_start_gate.sh`**:
 
-- `PIPELINE_START_DATE=2026-09-03`
-- **Przed tą datą:** scheduled cron → job `gate` ustawia `skip=true`, główny segment się **nie uruchamia** (success, notice w logu)
-- **`workflow_dispatch`:** bramka zawsze `skip=false`
-- **Od 2026-09-03:** crony działają normalnie (bramka przepuszcza)
+| Env | Wartość | Znaczenie |
+|-----|---------|-----------|
+| `PIPELINE_START_DATE` | `2026-10-05` | Kotwica (poniedziałek) |
+| `PIPELINE_CYCLE_DAYS` | `28` | Pełny cykl |
 
-Pierwszy automatyczny run: **Discovery 2026-09-03 03:30 PL** (czwartek).
+Logika bramki:
 
-### Tydzień roboczy
+- **`workflow_dispatch`:** zawsze `skip=false`
+- **Przed `PIPELINE_START_DATE`:** scheduled → `skip=true`
+- **Dzień cyklu 0–6** (pon–niedz od kotwicy + n×28): `skip=false` — pełny tydzień pipeline
+- **Dzień cyklu 7–27:** `skip=true` — notice z datą następnego tygodnia
+
+Pierwszy automatyczny run: **Discovery 2026-10-05 03:30 PL** (poniedziałek).
+
+Kolejne poniedziałki startu: `2026-10-05`, `2026-11-02`, `2026-11-30`, `2026-12-28`, …
+
+### Tydzień cyklu (aktywny)
 
 ```
 Pn–Pt 03:30   discovery
@@ -76,7 +87,9 @@ Nd 12:00      finalize      → Excel + mail + Google Drive
 | `claude_record_normalizer.py` | Filtr jakości, spójny `informacja`, weryfikacja kontaktów |
 | `send_mail.py` | Gmail SMTP + kopia w Wysłane |
 | `scripts/gdrive_upload.py` | Upload Excel → Drive (**tylko Finalize**) |
-| `.github/scripts/restore_pipeline_state.sh` | Przywracanie staging/cache z artefaktów między segmentami |
+| `.github/scripts/pipeline_start_gate.sh` | Bramka daty + cykl 28 dni |
+| `.github/scripts/restore_pipeline_state.sh` | Wybór najlepszego staging/cache z artefaktów |
+| `.github/scripts/score_staging.py` | Rank etapu + liczba rekordów (dla restore) |
 
 ### Funkcje etapów (`neueroeffnung_scraper.py`)
 
@@ -250,14 +263,15 @@ Każdy segment używa `try/finally` do zapisu staging.
 
 ### Wspólny wzorzec
 
-1. `actions/checkout@v4`
-2. `actions/cache@v4` — tylko cache enrichment (`*_cache.json`, `processed`); **bez** staging
-3. **`restore_pipeline_state.sh`** — nadpisuje staging z najnowszego artefaktu `pipeline-state` / `pipeline-staging-*`
-4. `setup-python` 3.13
-5. `pip install -r requirements.txt` (+ Playwright tylko Maps/full)
-6. `python neueroeffnung_scraper.py` z `PIPELINE_STAGE`
-7. Finalize: `requirements-drive.txt` + `scripts/gdrive_upload.py` **tylko gdy istnieje xlsx**
-8. `upload-artifact`: stage-specific + unified `pipeline-state`
+1. Job `gate` (`pipeline-gate.yml`) — poza cyklem: `skip=true`, główny job pominięty
+2. `actions/checkout@v4`
+3. `actions/cache@v4` — tylko cache enrichment (`*_cache.json`, `processed`); **bez** staging
+4. **`restore_pipeline_state.sh`** — spośród artefaktów `pipeline-state` / `pipeline-staging-*` wybiera **najwyższy etap** (`score_staging.py`), przy remisie więcej rekordów; kopiuje JSON do workspace
+5. `setup-python` 3.13
+6. `pip install -r requirements.txt` (+ Playwright tylko Maps/full)
+7. `python neueroeffnung_scraper.py` z `PIPELINE_STAGE`
+8. Finalize: `requirements-drive.txt` + `scripts/gdrive_upload.py` **tylko gdy istnieje xlsx**
+9. `upload-artifact`: stage-specific + unified `pipeline-state`
 
 ### Sekrety per workflow
 
@@ -272,7 +286,7 @@ Każdy segment używa `try/finally` do zapisu staging.
 ### Przekazywanie stanu (artefakty)
 
 Wcześniejszy błąd: cache z `hashFiles(staging)` był stały i nie zapisywał kolejnych wersji.  
-Teraz każdy segment **pobiera** najnowszy staging z artefaktów i **uploaduje** `pipeline-state`.
+Teraz każdy segment **pobiera** najlepszy staging z artefaktów (`score_staging.py`: `po_scrape_kontakt` > `po_maps` > `validated` > `discovery`) i **uploaduje** `pipeline-state`.
 
 ### `run-scraper.yml`
 
@@ -327,11 +341,11 @@ Testy wyłączają Maps/Contact/Claude przez `monkeypatch.setenv` lub domyślne 
 
 ---
 
-## 12. Diagram zależności tygodnia
+## 12. Diagram zależności tygodnia cyklu
 
 ```mermaid
 flowchart TB
-    subgraph weekday [Pn–Pt]
+    subgraph weekday [Pn–Pt — tydzień cyklu]
         D[Discovery 03:30]
         V[Validate 08:30]
         M[Maps 22:00]
@@ -351,15 +365,17 @@ flowchart TB
     C1 --> C2
     C2 --> V3
     V3 --> F
-    F -->|Excel + mail + Drive| OUT[Wynik tygodniowy]
+    F -->|Excel + mail + Drive| OUT[Wynik cyklu 28 dni]
 ```
+
+Poza dniami 0–6 cyklu job `gate` kończy run bez głównego segmentu.
 
 ---
 
 ## 13. Rozszerzanie
 
 - **Nowy segment:** dodaj funkcję `run_*_stage`, wpis w `dispatch`, workflow YAML, rozszerz cache paths.
-- **Zmiana harmonogramu:** edytuj `cron` w odpowiednim `pipeline-*.yml`.
-- **Większy throughput Maps:** zwiększ liczbę dni lub `MAPS_BATCH_LIMIT` (przy zachowaniu `MAX_RUNTIME_SECONDS`).
+- **Zmiana harmonogramu:** edytuj `cron` w odpowiednim `pipeline-*.yml` oraz ewentualnie `PIPELINE_CYCLE_DAYS` / `PIPELINE_START_DATE` w `pipeline-gate.yml`.
+- **Większy throughput Maps:** zwiększ liczbę dni w tygodniu cyklu lub `MAPS_BATCH_LIMIT` (przy zachowaniu `MAX_RUNTIME_SECONDS`).
 - **Reset pipeline'u:** usuń `neueroeffnung_staging.json` i opcjonalnie cache; `processed.json` zachowaj, jeśli nie chcesz re-eksportu.
 - **Zmiana folderu Drive:** zaktualizuj secret `GDRIVE_FOLDER_ID` i wpis w [GOOGLE_DRIVE.md](GOOGLE_DRIVE.md).

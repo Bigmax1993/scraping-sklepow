@@ -1,10 +1,12 @@
 #!/usr/bin/env bash
 # Przywraca najlepszy stan pipeline z artefaktów GHA.
-# Kryterium: najwyższy etap (validated > discovery itd.), potem liczba rekordów, potem data.
+# Kryterium: najwyższy etap (validated > discovery), potem liczba rekordów, potem data.
 set -euo pipefail
 
 REPO="${GITHUB_REPOSITORY:?}"
 DEST="${1:-.}"
+ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
+SCORE_SCRIPT="${ROOT}/.github/scripts/score_staging.py"
 mkdir -p "$DEST" /tmp/pipeline-pick
 
 mapfile -t CANDIDATES < <(
@@ -30,37 +32,6 @@ if [[ ${#CANDIDATES[@]} -eq 0 ]]; then
   echo "Brak artefaktów pipeline-state / pipeline-staging-* — start od pustego stanu."
   exit 0
 fi
-
-SCORE_PY='
-import json, sys
-from pathlib import Path
-
-STAGE_RANK = {
-    "po_scrape_kontakt": 40,
-    "po_kontakt": 40,
-    "po_maps": 30,
-    "validated": 20,
-    "discovery": 10,
-}
-
-staging = Path(sys.argv[1])
-data = json.loads(staging.read_text(encoding="utf-8"))
-meta_stage = (data.get("stage") or "").strip().lower()
-sheets = data.get("sheets") or {}
-total = 0
-rec_rank = 0
-for rows in sheets.values():
-    if not isinstance(rows, list):
-        continue
-    total += len(rows)
-    for r in rows:
-        if not isinstance(r, dict):
-            continue
-        rec_rank = max(rec_rank, STAGE_RANK.get((r.get("pipeline_stage") or "").strip().lower(), 0))
-rank = max(STAGE_RANK.get(meta_stage, 0), rec_rank)
-# score: stage*1e9 + records*1e3  (created_at tie-break done in bash)
-print(f"{rank}\t{total}\t{meta_stage or '?'}")
-'
 
 BEST_ID=""
 BEST_NAME=""
@@ -94,13 +65,12 @@ for line in "${CANDIDATES[@]}"; do
     continue
   fi
 
-  scored="$(python3 -c "$SCORE_PY" "$staging")"
+  scored="$(python3 "$SCORE_SCRIPT" "$staging")"
   rank="$(echo "$scored" | cut -f1)"
   total="$(echo "$scored" | cut -f2)"
   stage="$(echo "$scored" | cut -f3)"
   echo "  stage=${stage} rank=${rank} records=${total}"
 
-  # Kandydaci są od najnowszego: przy równym rank+total zostawiamy pierwszego (najnowszy).
   if [[ "$rank" -gt "$BEST_RANK" ]] || { [[ "$rank" -eq "$BEST_RANK" ]] && [[ "$total" -gt "$BEST_TOTAL" ]]; }; then
     BEST_RANK="$rank"
     BEST_TOTAL="$total"

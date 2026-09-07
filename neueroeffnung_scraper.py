@@ -41,7 +41,7 @@ CACHE_FILE = SCRIPT_DIR / "neueroeffnung_detail_cache.json"
 LOG_FILE = SCRIPT_DIR / "neueroeffnung_scraper.log"
 
 REQUEST_DELAY_SEC = 0.8
-MAX_PAGES_PER_CATEGORY = 30  # strona 1 ma linki do szczegółów; 2+ tylko podstawowe dane
+MAX_PAGES_PER_CATEGORY = 80  # strona 1 ma linki do szczegółów; 2+ tylko podstawowe dane
 TIMEOUT_SEC = 30
 MAX_VALIDATION_RETRIES = 2
 

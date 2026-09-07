@@ -184,10 +184,12 @@ GHA używa `actions/cache@v4` z kluczem `pipeline-${{ github.ref_name }}-${{ git
 
 ### 6.1 Discovery
 
-1. Scrape 4 kategorii (`collect_category_records`)
+1. Scrape 4 kategorii (`collect_category_records`), max `MAX_PAGES_PER_CATEGORY` (**80**) stron listy / kategoria
 2. Clean, filtr dat Q3 2026 – Q4 2028
 3. Merge do staging (bez nadpisywania zaawansowanych)
 4. Zapis staging
+
+Listy neueroeffnung.info są posortowane rosnąco po dacie otwarcia (~50–60 stron/kategoria). Limit **80** obejmuje otwarcia 2027–2028 (przy limicie 30 Discovery kończyło się na samym 2026). Pętla i tak przerywa wcześniej przy braku wpisów / `rel=next`.
 
 **Wejście cache:** `detail_cache`, `processed`  
 **Wyjście:** staging ze stage `discovery`

@@ -310,7 +310,7 @@ Ręczny upload: `python scripts/gdrive_upload.py` (wymaga `neueroeffnung_wynik.x
 
 | Parametr | Domyślnie | Opis |
 |----------|-----------|------|
-| `MAX_PAGES_PER_CATEGORY` | 30 | Max stron listy / kategoria |
+| `MAX_PAGES_PER_CATEGORY` | 80 | Max stron listy / kategoria (zapas ponad ~56; obejmuje 2027–2028) |
 | `REQUEST_DELAY_SEC` | 0.8 | Opóźnienie HTTP (s) |
 | `MAX_ADDRESS_LENGTH` | 650 | Max długość adresu |
 | `MAX_INFO_LENGTH` | 5000 | Max długość opisu |
